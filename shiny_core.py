@@ -12,6 +12,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -20,8 +21,23 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
+# Determina o diretório base (se congelado com PyInstaller ou executado como script)
+if getattr(sys, "frozen", False):
+    SCRIPT_DIR = Path(sys.executable).parent.resolve()
+else:
+    SCRIPT_DIR = Path(__file__).parent.resolve()
+
 DEFAULT_LUA_PATH = SCRIPT_DIR / "shiny_hunt.lua"
+
+# Se o script Lua não for encontrado na pasta do .exe, tenta extrair dos arquivos empacotados
+if not DEFAULT_LUA_PATH.exists() and hasattr(sys, "_MEIPASS"):
+    bundled_lua = Path(sys._MEIPASS) / "shiny_hunt.lua"
+    if bundled_lua.exists():
+        try:
+            shutil.copy2(bundled_lua, DEFAULT_LUA_PATH)
+        except Exception:
+            DEFAULT_LUA_PATH = bundled_lua
+
 CONFIG_FILE = SCRIPT_DIR / "config.json"
 
 

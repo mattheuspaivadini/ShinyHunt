@@ -23,11 +23,13 @@ Antes de usar o programa, você precisa de um save posicionado no **laboratório
 Você pode executar a aplicação com **Interface Gráfica (GUI)** ou em **Modo Terminal (CLI)**:
 
 #### 🖥️ Modo Interface Gráfica (Recomendado):
+Você pode simplesmente dar um **duplo clique** em `ShinyHunter.exe` na pasta do projeto, ou executar via terminal:
 ```powershell
 cd C:\Users\Matheus\Documents\ShinyHunt
-python shiny_hunter.py
+.\ShinyHunter.exe
 ```
-*(ou `python shiny_hunter_gui.py`)*
+*(ou `python shiny_hunter.py`)*
+
 
 Na interface você poderá:
 - ⏱️ Acompanhar o **tempo decorrido** em tempo real.
