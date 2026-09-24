@@ -11,6 +11,9 @@
 
 -- ==================== CONFIGURAÇÃO ====================
 
+-- ID pré-definido caso este script tenha sido gerado para uma instância específica
+local SCRIPT_INSTANCE_ID = SCRIPT_INSTANCE_ID or nil
+
 -- Servidor Python (para coordenação entre instâncias)
 local SERVER_HOST = "127.0.0.1"
 local SERVER_PORT = 27015
@@ -79,6 +82,48 @@ local titleExtra     = 0         -- sorteado no INIT
 local loadingExtra   = 0         -- sorteado no INIT
 
 -- ==================== FUNÇÕES UTILITÁRIAS ====================
+
+--- Detecta o número real desta instância através de múltiplos métodos (ROM header, env, arquivo, script)
+local function detectInstanceId()
+    -- 1. Definido diretamente no script desta instância
+    if SCRIPT_INSTANCE_ID and type(SCRIPT_INSTANCE_ID) == "number" and SCRIPT_INSTANCE_ID >= 1 and SCRIPT_INSTANCE_ID <= 30 then
+        return SCRIPT_INSTANCE_ID
+    end
+
+    -- 2. ROM header (offset 0x080000B5 marcado pelo inicializador)
+    if emu and type(emu.read8) == "function" then
+        local ok, val = pcall(function() return emu:read8(0x080000B5) end)
+        if ok and val and val >= 1 and val <= 30 then
+            return val
+        end
+    end
+
+    -- 3. Variável de ambiente repassada no processo
+    if os and type(os.getenv) == "function" then
+        local ok, envVal = pcall(function() return os.getenv("SHINY_INSTANCE_ID") end)
+        if ok and envVal then
+            local num = tonumber(envVal)
+            if num and num >= 1 and num <= 30 then
+                return num
+            end
+        end
+    end
+
+    -- 4. Arquivo instance_id.txt no diretório da ROM/instância
+    if io and type(io.open) == "function" then
+        local ok, f = pcall(function() return io.open("instance_id.txt", "r") end)
+        if ok and f then
+            local content = f:read("*all")
+            f:close()
+            local num = tonumber(content and content:match("%d+"))
+            if num and num >= 1 and num <= 30 then
+                return num
+            end
+        end
+    end
+
+    return nil
+end
 
 --- Muda o estado da máquina de estados
 local function changeState(newState)
@@ -199,7 +244,7 @@ local function checkServerMessages()
         local id = string.match(data, "ID|(%d+)")
         if id then
             instanceId = id
-            console:log("[Info] ID da instancia: #" .. instanceId)
+            console:log("[Info] ID da instancia confirmado pelo servidor: #" .. instanceId)
             -- Re-semeia o RNG especificamente para esta instancia, evitando colisoes
             pcall(function()
                 local numId = tonumber(instanceId) or 1
@@ -219,6 +264,22 @@ local function onFrame()
     -- Verificar mensagens do servidor a cada ~1 segundo
     if connected and totalFrames % 60 == 0 then
         checkServerMessages()
+    end
+
+    -- Se ainda não tiver ID definido, tenta detectar novamente periodicamente
+    if (instanceId == "?" or instanceId == nil) and totalFrames % 30 == 0 then
+        local detected = detectInstanceId()
+        if detected then
+            instanceId = tostring(detected)
+            console:log("[Info] Instancia identificada dinamicamente: #" .. instanceId)
+            pcall(function()
+                math.randomseed(os.time() + math.floor(os.clock() * 1000000) + detected * 7919)
+                math.random(); math.random(); math.random()
+            end)
+            if connected then
+                sendMessage("IDENTIFY|" .. detected)
+            end
+        end
     end
 
     -- Se recebeu sinal para parar, não faz nada
@@ -444,17 +505,30 @@ console:log("    Party PV:   " .. hex(ADDR_PARTY_PV))
 console:log("    Party OTID: " .. hex(ADDR_PARTY_OTID))
 console:log("")
 
+-- Tenta identificar a instância localmente antes de conectar
+local detected = detectInstanceId()
+if detected then
+    instanceId = tostring(detected)
+    console:log("[Info] Instancia identificada localmente: #" .. instanceId)
+    pcall(function()
+        math.randomseed(os.time() + math.floor(os.clock() * 1000000) + detected * 7919)
+        math.random(); math.random(); math.random()
+    end)
+else
+    pcall(function()
+        math.randomseed(os.time() + math.floor(os.clock() * 1000000))
+    end)
+end
+
 -- Tenta conectar ao servidor Python
 connectToServer()
 if connected then
-    sendMessage("HELLO")
+    if detected then
+        sendMessage("HELLO|" .. detected)
+    else
+        sendMessage("HELLO")
+    end
 end
-
--- Lua 5.4 já semeia aleatoriamente, mas isso garante que instâncias
--- diferentes não sorteiem a mesma sequência caso a build use outra versão.
-pcall(function()
-    math.randomseed(os.time() + math.floor(os.clock() * 1000000))
-end)
 
 -- Registra o callback de frame
 callbacks:add("frame", onFrame)

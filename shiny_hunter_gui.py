@@ -1027,6 +1027,28 @@ class ShinyHuntGUI:
         # Atualiza badge de status
         self.status_badge.config(text="SHINY ENCONTRADO!", fg="#11111b", bg=DarkTheme.ACCENT_YELLOW)
 
+        # Identifica a instância correta pelo save state gravado em disco
+        keep_idx = None
+        if self.manager:
+            keep_idx = self.manager.find_shiny_instance(self.server.start_time)
+            if keep_idx is not None:
+                info["dir_instance"] = keep_idx
+                # Sincroniza a instância do info se houver divergência
+                if str(inst_num) != str(keep_idx):
+                    self.log(
+                        f"Sincronização de Instância: script reportou #{inst_num}, "
+                        f"mas o save state foi confirmado na Instância #{keep_idx}. "
+                        f"Associando para #{keep_idx}.",
+                        "WARNING",
+                    )
+                    inst_num = keep_idx
+                    info["instance"] = keep_idx
+
+        # Se não detectou save state por timestamp mas tem inst_num numérico, usa inst_num
+        if keep_idx is None and isinstance(inst_num, int):
+            keep_idx = inst_num
+            info["dir_instance"] = inst_num
+
         # Destaca a linha correspondente na tabela
         iid = f"inst_{inst_num}"
         if self.tree_instances.exists(iid):
@@ -1045,7 +1067,6 @@ class ShinyHuntGUI:
         # Fecha as outras instâncias em background para não bloquear o Tkinter
         # (kill_all contém time.sleep que travaria o event loop)
         if self.manager:
-            keep_idx = self.manager.find_shiny_instance(self.server.start_time)
             if keep_idx is None:
                 # Não sabemos qual é: é mais seguro NÃO fechar nada.
                 self.log(
@@ -1054,7 +1075,6 @@ class ShinyHuntGUI:
                     "WARNING",
                 )
             else:
-                info["dir_instance"] = keep_idx   # número real da pasta
                 threading.Thread(
                     target=self.manager.kill_all,
                     args=(keep_idx,),

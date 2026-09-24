@@ -6,3 +6,6 @@ dist/
 instances/
 config.json
 *.exe
+shiny_hunt_Debug.lua
+*debug*
+*Debug*
