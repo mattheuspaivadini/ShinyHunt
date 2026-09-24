@@ -1,5 +1,5 @@
 -- ============================================================
--- ★ Shiny Charmander Hunter v1.0 ★
+-- Hunter Shiny v1.0
 -- Pokemon Fire Red (US) v1.0 — mGBA Automation Script
 -- ============================================================
 -- COMO USAR:
@@ -42,6 +42,10 @@ local CONTINUE_DURATION   = 240   -- 4s: selecionar Continue e carregar
 local LOADING_WAIT        = 180   -- 3s: espera o jogo carregar completamente
 local MASH_TIMEOUT        = 5400  -- 90s: timeout para pegar Charmander
 local PRESS_INTERVAL      = 15    -- Pressionar botão a cada 15 frames (~4x/s)
+
+-- Atraso extra máximo (em frames) sorteado a cada tentativa (otimizado para velocidade)
+local TITLE_EXTRA_MAX   = 180   -- até 3s a mais na title screen (garante nova seed de boot)
+local LOADING_EXTRA_MAX = 180   -- até 3s a mais após carregar save (garante novos frames de RNG)
 local PRESS_HOLD_FRAMES   = 3     -- Manter botão pressionado por 3 frames
 
 -- ==================== ESTADOS ====================
@@ -71,6 +75,8 @@ local connected      = false     -- Se está conectado ao servidor
 local instanceId     = "?"       -- ID da instância (atribuído pelo servidor)
 local shouldStop     = false     -- Se deve parar (shiny encontrado em outra instância)
 local lastStateName  = ""        -- Para log de mudança de estado
+local titleExtra     = 0         -- sorteado no INIT
+local loadingExtra   = 0         -- sorteado no INIT
 
 -- ==================== FUNÇÕES UTILITÁRIAS ====================
 
@@ -194,6 +200,12 @@ local function checkServerMessages()
         if id then
             instanceId = id
             console:log("[Info] ID da instancia: #" .. instanceId)
+            -- Re-semeia o RNG especificamente para esta instancia, evitando colisoes
+            pcall(function()
+                local numId = tonumber(instanceId) or 1
+                math.randomseed(os.time() + math.floor(os.clock() * 1000000) + numId * 7919)
+                math.random(); math.random(); math.random()
+            end)
         end
     end
 end
@@ -219,12 +231,19 @@ local function onFrame()
 
     if currentState == STATE.INIT then
         -- ── Início de uma nova tentativa ──
+        if attempts == 0 then
+            pcall(function() emu:reset() end)   -- boot limpo na 1ª tentativa
+        end
         attempts = attempts + 1
+        local instOffset = tonumber(instanceId) or 1
+        titleExtra   = (math.random(0, TITLE_EXTRA_MAX) + instOffset * 7) % (TITLE_EXTRA_MAX + 1)
+        loadingExtra = (math.random(0, LOADING_EXTRA_MAX) + instOffset * 13) % (LOADING_EXTRA_MAX + 1)
         prevPV = 0
         releaseAll()
 
         console:log("========================================")
         console:log("  Tentativa #" .. attempts .. "  (Instancia #" .. instanceId .. ")")
+        console:log("  Delays sorteados: title +" .. titleExtra .. " | loading +" .. loadingExtra)
         console:log("========================================")
 
         sendMessage("ATTEMPT|" .. attempts)
@@ -233,7 +252,7 @@ local function onFrame()
     elseif currentState == STATE.TITLE_WAIT then
         -- ── Espera o BIOS boot + logo Game Freak ──
         releaseAll()
-        if stateFrames >= WAIT_AFTER_RESET then
+        if stateFrames >= WAIT_AFTER_RESET + titleExtra then
             console:log("[State] Title screen - mashing A/Start...")
             changeState(STATE.TITLE_MASH)
         end
@@ -272,7 +291,7 @@ local function onFrame()
     elseif currentState == STATE.LOADING then
         -- ── Espera o jogo carregar completamente ──
         releaseAll()
-        if stateFrames >= LOADING_WAIT then
+        if stateFrames >= LOADING_WAIT + loadingExtra then
             -- Lê o PV inicial (deve ser 0 = party vazia)
             prevPV = readPV()
             if prevPV ~= 0 then
@@ -360,7 +379,7 @@ local function onFrame()
 
         console:log("*********************************************************")
         console:log("*                                                       *")
-        console:log("*     ★ ★ ★  SHINY CHARMANDER ENCONTRADO!!!  ★ ★ ★     *")
+        console:log("*                 SHINY ENCONTRADO!!!                   *")
         console:log("*                                                       *")
         console:log("*********************************************************")
         console:log("")
@@ -416,7 +435,7 @@ end
 
 console:log("")
 console:log("=========================================================")
-console:log("  ★  Shiny Charmander Hunter v1.0")
+console:log("  Hunter Shiny v1.0")
 console:log("  Pokemon Fire Red (US) v1.0")
 console:log("=========================================================")
 console:log("")
@@ -430,6 +449,12 @@ connectToServer()
 if connected then
     sendMessage("HELLO")
 end
+
+-- Lua 5.4 já semeia aleatoriamente, mas isso garante que instâncias
+-- diferentes não sorteiem a mesma sequência caso a build use outra versão.
+pcall(function()
+    math.randomseed(os.time() + math.floor(os.clock() * 1000000))
+end)
 
 -- Registra o callback de frame
 callbacks:add("frame", onFrame)

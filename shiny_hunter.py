@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-★ Shiny Charmander Hunter v1.0 ★
+Hunter Shiny v1.0
 Gerenciador de 10 instâncias mGBA para shiny hunting automatizado
 Pokemon Fire Red (US) v1.0
 
@@ -319,6 +319,22 @@ class InstanceManager:
         """Retorna quantos processos mGBA ainda estão rodando."""
         return sum(1 for p in self.processes if p.poll() is None)
 
+    def find_shiny_instance(self, since):
+        """Retorna o número da instância cujo save state foi gravado após `since`."""
+        threshold = since.timestamp()
+        best_idx = None
+        best_mtime = 0.0
+        for i in range(1, NUM_INSTANCES + 1):
+            inst_dir = INSTANCES_DIR / f"instance_{i}"
+            for f in inst_dir.glob("*.ss*"):
+                try:
+                    m = f.stat().st_mtime
+                except OSError:
+                    continue
+                if m >= threshold and m > best_mtime:
+                    best_idx, best_mtime = i, m
+        return best_idx
+
 
 # ======================== DISPLAY ========================
 
@@ -326,7 +342,7 @@ def print_banner():
     """Exibe o banner do programa."""
     print()
     print(f"  {C.YELLOW}{C.BOLD}╔══════════════════════════════════════════════════════╗{C.RESET}")
-    print(f"  {C.YELLOW}{C.BOLD}║  {C.star()}  Shiny Charmander Hunter v1.0  {C.star()}                 ║{C.RESET}")
+    print(f"  {C.YELLOW}{C.BOLD}║  {C.star()}  Hunter Shiny v1.0  {C.star()}                           ║{C.RESET}")
     print(f"  {C.YELLOW}{C.BOLD}║  Pokemon Fire Red (US) v1.0 — 10 Instâncias         ║{C.RESET}")
     print(f"  {C.YELLOW}{C.BOLD}╚══════════════════════════════════════════════════════╝{C.RESET}")
     print()
@@ -450,12 +466,13 @@ def print_shiny_celebration(info, start_time):
     print(f"  {C.YELLOW}{C.BOLD}")
     print(f"  ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★")
     print(f"  ★                                                    ★")
-    print(f"  ★      SHINY CHARMANDER ENCONTRADO!!!                ★")
+    print(f"  ★               SHINY ENCONTRADO!!!                  ★")
     print(f"  ★                                                    ★")
     print(f"  ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★ ★")
     print(f"  {C.RESET}")
 
     inst_num = info.get("instance", "?")
+    dir_inst = info.get("dir_instance", inst_num)
     print(f"  {C.GREEN}Instância:          {C.WHITE}{C.BOLD}#{inst_num}{C.RESET}")
     print(f"  {C.GREEN}Personality Value:  {C.WHITE}{info.get('pv', '?')}{C.RESET}")
     print(f"  {C.GREEN}OT ID:             {C.WHITE}{info.get('otid', '?')}{C.RESET}")
@@ -464,8 +481,8 @@ def print_shiny_celebration(info, start_time):
     print(f"  {C.GREEN}Tempo total:        {C.WHITE}{hours:02d}h {minutes:02d}m {seconds:02d}s{C.RESET}")
     print()
 
-    inst_dir = INSTANCES_DIR / f"instance_{inst_num}"
-    print(f"  {C.CYAN}O save state foi salvo no {C.BOLD}Slot 1{C.RESET}{C.CYAN} da instância #{inst_num}.{C.RESET}")
+    inst_dir = INSTANCES_DIR / f"instance_{dir_inst}"
+    print(f"  {C.CYAN}O save state foi salvo no {C.BOLD}Slot 1{C.RESET}{C.CYAN} da instância #{dir_inst}.{C.RESET}")
     print(f"  {C.CYAN}Para continuar jogando:{C.RESET}")
     print(f"    1. Abra o mGBA com a ROM: {C.WHITE}{inst_dir / ROM_NAME}{C.RESET}")
     print(f"    2. Carregue o save state: {C.WHITE}File > Load State > Slot 1{C.RESET}")
@@ -557,8 +574,13 @@ def run_cli():
     if server.shiny_found:
         shiny_instance = server.shiny_info.get("instance")
 
-        # Fecha todas as instâncias EXCETO a que encontrou o shiny
-        manager.kill_all(keep_instance=shiny_instance)
+        # Identifica a instância correta pelo save state
+        keep = manager.find_shiny_instance(server.start_time)
+        if keep is None:
+            print(f"  {C.warn()} Não foi possível identificar a instância do shiny; nenhuma janela foi fechada.")
+        else:
+            manager.kill_all(keep_instance=keep)
+            server.shiny_info["dir_instance"] = keep
 
         # Celebração!
         print_shiny_celebration(server.shiny_info, server.start_time)

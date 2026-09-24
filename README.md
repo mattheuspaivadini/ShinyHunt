@@ -1,6 +1,6 @@
-# ★ Shiny Charmander Hunter
+# Hunter Shiny
 
-Programa automatizado para encontrar um **Charmander Shiny** em **Pokémon Fire Red (US) v1.0** usando **10 instâncias simultâneas** de mGBA.
+Programa automatizado para encontrar um Pokémon Shiny em **Pokémon Fire Red (US) v1.0** usando **10 instâncias simultâneas** de mGBA.
 
 ## Pré-requisitos
 

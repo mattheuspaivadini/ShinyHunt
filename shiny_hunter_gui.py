@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-★ Shiny Charmander Hunter — Interface Gráfica (GUI) ★
+Hunter Shiny — Interface Gráfica (GUI)
 Pokemon Fire Red (US) v1.0
 Gerenciador automatizado com mGBA e scripts Lua.
 """
@@ -59,7 +59,7 @@ class DarkTheme:
     ACCENT_RED_HOVER = "#eba0ac"
     ACCENT_YELLOW = "#f9e2af"  # Alerta / Reset / Shiny
     ACCENT_BLUE   = "#89b4fa"  # Info / Primário
-    ACCENT_PURPLE = "#cba6f7"  # Destaque / Charmander Shiny
+    ACCENT_PURPLE = "#cba6f7"  # Destaque / Shiny
     ACCENT_ORANGE = "#fab387"  # Fogo / Pokémon
 
 
@@ -68,7 +68,7 @@ class ShinyHuntGUI:
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("★ Shiny Charmander Hunter — Pokémon Fire Red")
+        self.root.title("Hunter Shiny — Pokémon Fire Red")
         self.root.geometry("1020x760")
         self.root.minsize(860, 640)
         self.root.configure(bg=DarkTheme.BG_DARK)
@@ -78,6 +78,7 @@ class ShinyHuntGUI:
         self.server: Optional[ShinyServer] = None
         self.manager: Optional[InstanceManager] = None
         self.is_hunting = False
+        self.shiny_celebrated = False
         self.start_time: Optional[datetime] = None
         self.event_queue = queue.Queue()
         self.pid_map = {}  # {instance_id: pid}
@@ -198,7 +199,7 @@ class ShinyHuntGUI:
 
         title_lbl = tk.Label(
             title_box,
-            text="★ Shiny Charmander Hunter",
+            text="Hunter Shiny",
             font=("Segoe UI", 16, "bold"),
             fg=DarkTheme.ACCENT_ORANGE,
             bg=DarkTheme.BG_DARK,
@@ -207,7 +208,7 @@ class ShinyHuntGUI:
 
         subtitle_lbl = tk.Label(
             title_box,
-            text="Pokémon Fire Red (US) v1.0 • Automação Multi-Instância mGBA",
+            text="Pokémon Fire Red (US) v1.0 - Automação Multi-Instância mGBA",
             font=("Segoe UI", 9),
             fg=DarkTheme.TEXT_MUTED,
             bg=DarkTheme.BG_DARK,
@@ -217,7 +218,7 @@ class ShinyHuntGUI:
         # Status Badge no canto superior direito
         self.status_badge = tk.Label(
             header_frame,
-            text="● PRONTO",
+            text="PRONTO",
             font=("Segoe UI", 10, "bold"),
             fg=DarkTheme.ACCENT_GREEN,
             bg=DarkTheme.SURFACE_1,
@@ -239,23 +240,23 @@ class ShinyHuntGUI:
 
         # 1. Tempo Decorrido
         self.lbl_elapsed_val = self._create_kpi_card(
-            metrics_frame, col=0, title="⏱ TEMPO DECORRIDO", default_val="00:00:00", val_color=DarkTheme.ACCENT_BLUE
+            metrics_frame, col=0, title="TEMPO DECORRIDO", default_val="00:00:00", val_color=DarkTheme.ACCENT_BLUE
         )
         # 2. Instâncias Abertas / Ativas
         self.lbl_instances_val = self._create_kpi_card(
-            metrics_frame, col=1, title="🎮 INSTÂNCIAS", default_val="0 / 10", val_color=DarkTheme.ACCENT_PURPLE
+            metrics_frame, col=1, title="INSTÂNCIAS", default_val="0 / 10", val_color=DarkTheme.ACCENT_PURPLE
         )
         # 3. Total de Tentativas
         self.lbl_attempts_val = self._create_kpi_card(
-            metrics_frame, col=2, title="🎯 TENTATIVAS", default_val="0", val_color=DarkTheme.ACCENT_YELLOW
+            metrics_frame, col=2, title="TENTATIVAS", default_val="0", val_color=DarkTheme.ACCENT_YELLOW
         )
         # 4. Velocidade Estimada
         self.lbl_speed_val = self._create_kpi_card(
-            metrics_frame, col=3, title="⚡ VELOCIDADE", default_val="0 / hora", val_color=DarkTheme.TEXT_MAIN
+            metrics_frame, col=3, title="VELOCIDADE", default_val="0 / hora", val_color=DarkTheme.TEXT_MAIN
         )
         # 5. Probabilidade Acumulada
         self.lbl_chance_val = self._create_kpi_card(
-            metrics_frame, col=4, title="🎲 CHANCE SHINY", default_val="0.00%", val_color=DarkTheme.ACCENT_GREEN
+            metrics_frame, col=4, title="CHANCE SHINY", default_val="0.00%", val_color=DarkTheme.ACCENT_GREEN
         )
 
     def _create_kpi_card(self, parent, col: int, title: str, default_val: str, val_color: str) -> tk.Label:
@@ -307,7 +308,7 @@ class ShinyHuntGUI:
 
         tk.Label(
             card_header,
-            text="⚙ CONFIGURAÇÃO DA EXECUÇÃO",
+            text="CONFIGURAÇÃO DA EXECUÇÃO",
             font=("Segoe UI", 9, "bold"),
             fg=DarkTheme.TEXT_MUTED,
             bg=DarkTheme.SURFACE_0,
@@ -493,7 +494,7 @@ class ShinyHuntGUI:
         # Botão Iniciar Caçada
         self.btn_start = tk.Button(
             action_frame,
-            text="▶ INICIAR CAÇADA",
+            text="INICIAR CAÇADA",
             font=("Segoe UI", 11, "bold"),
             bg=DarkTheme.ACCENT_GREEN,
             fg="#11111b",
@@ -511,7 +512,7 @@ class ShinyHuntGUI:
         # Botão Parar Caçada
         self.btn_stop = tk.Button(
             action_frame,
-            text="⏹ PARAR CAÇADA",
+            text="PARAR CAÇADA",
             font=("Segoe UI", 11, "bold"),
             bg=DarkTheme.ACCENT_RED,
             fg="#11111b",
@@ -530,7 +531,7 @@ class ShinyHuntGUI:
         # Botão Copiar Caminho do Script Lua
         self.btn_copy_lua = tk.Button(
             action_frame,
-            text="📋 Copiar Caminho do Script Lua",
+            text="Copiar Caminho do Script Lua",
             font=("Segoe UI", 9, "bold"),
             bg=DarkTheme.SURFACE_1,
             fg=DarkTheme.TEXT_MAIN,
@@ -548,7 +549,7 @@ class ShinyHuntGUI:
         # Botão Como Usar / Instruções
         self.btn_help = tk.Button(
             action_frame,
-            text="❓ Como Usar / Instruções",
+            text="Como Usar / Instruções",
             font=("Segoe UI", 9),
             bg=DarkTheme.SURFACE_1,
             fg=DarkTheme.TEXT_MUTED,
@@ -570,7 +571,7 @@ class ShinyHuntGUI:
 
         # ── Aba 1: Tabela de Instâncias ──
         tab_instances = tk.Frame(notebook, bg=DarkTheme.SURFACE_0)
-        notebook.add(tab_instances, text="  🎮 Instâncias  ")
+        notebook.add(tab_instances, text="  Instâncias  ")
 
         inst_container = tk.Frame(tab_instances, bg=DarkTheme.SURFACE_0, padx=8, pady=8)
         inst_container.pack(fill="both", expand=True)
@@ -612,7 +613,7 @@ class ShinyHuntGUI:
 
         # ── Aba 2: Console de Logs ──
         tab_logs = tk.Frame(notebook, bg=DarkTheme.SURFACE_0)
-        notebook.add(tab_logs, text="  📜 Console de Logs  ")
+        notebook.add(tab_logs, text="  Console de Logs  ")
 
         log_container = tk.Frame(tab_logs, bg=DarkTheme.SURFACE_0, padx=8, pady=8)
         log_container.pack(fill="both", expand=True)
@@ -790,11 +791,11 @@ class ShinyHuntGUI:
             "COMO CARREGAR O SCRIPT LUA NAS JANELAS:\n\n"
             "1. Clique no botão 'INICIAR CAÇADA'. O programa criará as cópias da ROM e abrirá as janelas do mGBA.\n\n"
             "2. Para CADA janela do mGBA aberta:\n"
-            "   • No menu superior do mGBA: Tools > Scripting...\n"
-            "   • Na janela de script que abrir: File > Load script...\n"
-            f"   • Selecione o arquivo: {DEFAULT_LUA_PATH}\n\n"
+            "   - No menu superior do mGBA: Tools > Scripting...\n"
+            "   - Na janela de script que abrir: File > Load script...\n"
+            f"   - Selecione o arquivo: {DEFAULT_LUA_PATH}\n\n"
             "3. O script conecta automaticamente e a caçada começa!\n"
-            "4. Quando o Charmander Shiny for encontrado, o programa salvará no Slot 1 e fechará as outras instâncias automaticamente."
+            "4. Quando o Shiny for encontrado, o programa salvará no Slot 1 e fechará as outras instâncias automaticamente."
         )
         messagebox.showinfo("Instruções de Uso", msg)
 
@@ -839,6 +840,7 @@ class ShinyHuntGUI:
 
         # Atualiza botões e status visual
         self.is_hunting = True
+        self.shiny_celebrated = False
         self.start_time = datetime.now()
         self.btn_start.config(state="disabled")
         self.btn_stop.config(state="normal")
@@ -848,7 +850,7 @@ class ShinyHuntGUI:
         self.entry_sav.config(state="disabled")
         self.entry_port.config(state="disabled")
 
-        self.status_badge.config(text="● CAÇANDO", fg=DarkTheme.ACCENT_GREEN)
+        self.status_badge.config(text="CAÇANDO", fg=DarkTheme.ACCENT_GREEN)
         self.lbl_instances_val.config(text=f"0 / {self.config.num_instances}")
         self.lbl_attempts_val.config(text="0")
         self.lbl_speed_val.config(text="0 / hora")
@@ -1011,6 +1013,10 @@ class ShinyHuntGUI:
 
     def _handle_shiny_celebration(self, info: dict):
         """Celebra a descoberta do Shiny com som, log e janela especial."""
+        # Marca que o shiny foi celebrado para impedir que _tick_timer
+        # chame stop_hunt() ao detectar que os processos mGBA foram fechados
+        self.shiny_celebrated = True
+
         inst_num = info.get("instance", "?")
         pv = info.get("pv", "?")
         otid = info.get("otid", "?")
@@ -1019,30 +1025,41 @@ class ShinyHuntGUI:
         elapsed = format_elapsed(self.start_time)
 
         # Atualiza badge de status
-        self.status_badge.config(text="★ SHINY ENCONTRADO! ★", fg="#11111b", bg=DarkTheme.ACCENT_YELLOW)
+        self.status_badge.config(text="SHINY ENCONTRADO!", fg="#11111b", bg=DarkTheme.ACCENT_YELLOW)
 
         # Destaca a linha correspondente na tabela
         iid = f"inst_{inst_num}"
         if self.tree_instances.exists(iid):
             curr = list(self.tree_instances.item(iid, "values"))
-            curr[2] = "★ SHINY!"
+            curr[2] = "SHINY!"
             curr[4] = datetime.now().strftime("%H:%M:%S")
             self.tree_instances.item(iid, values=curr, tags=("shiny",))
 
         self.log("=" * 60, "SHINY")
-        self.log(f"★ ★ ★ SHINY CHARMANDER ENCONTRADO NA INSTÂNCIA #{inst_num}! ★ ★ ★", "SHINY")
+        self.log(f"SHINY ENCONTRADO NA INSTÂNCIA #{inst_num}!", "SHINY")
         self.log(f"Personality Value (PV): {pv} | OT ID: {otid}", "SHINY")
         self.log(f"Tentativas: {inst_att} (desta instância) | Total acumulado: {total_att}", "SHINY")
         self.log(f"Tempo total decorrido: {elapsed}", "SHINY")
         self.log("=" * 60, "SHINY")
 
-        # Fecha as outras instâncias, mantendo a vencedora aberta
+        # Fecha as outras instâncias em background para não bloquear o Tkinter
+        # (kill_all contém time.sleep que travaria o event loop)
         if self.manager:
-            try:
-                keep_idx = int(inst_num)
-                self.manager.kill_all(keep_instance=keep_idx)
-            except Exception:
-                pass
+            keep_idx = self.manager.find_shiny_instance(self.server.start_time)
+            if keep_idx is None:
+                # Não sabemos qual é: é mais seguro NÃO fechar nada.
+                self.log(
+                    "Não foi possível identificar qual janela achou o shiny. "
+                    "Nenhuma janela foi fechada. Procure o .ss1 mais recente em instances/.",
+                    "WARNING",
+                )
+            else:
+                info["dir_instance"] = keep_idx   # número real da pasta
+                threading.Thread(
+                    target=self.manager.kill_all,
+                    args=(keep_idx,),
+                    daemon=True,
+                ).start()
 
         # Tenta tocar som de notificação do Windows
         try:
@@ -1057,7 +1074,7 @@ class ShinyHuntGUI:
     def _show_celebration_dialog(self, info: dict, elapsed: str):
         """Abre janela de celebração com detalhes do Shiny."""
         win = tk.Toplevel(self.root)
-        win.title("★ SHINY CHARMANDER ENCONTRADO! ★")
+        win.title("SHINY ENCONTRADO!")
         win.geometry("540x420")
         win.configure(bg=DarkTheme.BG_DARK)
         win.resizable(False, False)
@@ -1069,7 +1086,7 @@ class ShinyHuntGUI:
 
         tk.Label(
             content,
-            text="★ PARABÉNS! SHINY ENCONTRADO! ★",
+            text="PARABÉNS! SHINY ENCONTRADO!",
             font=("Segoe UI", 16, "bold"),
             fg=DarkTheme.ACCENT_YELLOW,
             bg=DarkTheme.BG_DARK,
@@ -1108,10 +1125,11 @@ class ShinyHuntGUI:
                 r_frame, text=val, font=("Segoe UI", 10, "bold"), fg=DarkTheme.ACCENT_GREEN, bg=DarkTheme.SURFACE_0
             ).pack(side="right")
 
+        dir_inst = info.get("dir_instance", inst_num)
         tk.Label(
             content,
             text=(
-                f"O Save State foi salvo no SLOT 1 da Instância #{inst_num}.\n"
+                f"O Save State foi salvo no SLOT 1 da Instância #{dir_inst}.\n"
                 "Para continuar jogando:\n"
                 "1. Vá na janela do mGBA que ficou aberta.\n"
                 "2. Menu File > Load State > Slot 1."
@@ -1144,11 +1162,14 @@ class ShinyHuntGUI:
 
         self.log("Encerrando caçada e fechando instâncias do mGBA...", "WARNING")
 
+        # Executa kill_all em background para não bloquear o Tkinter
         if self.manager:
-            try:
-                self.manager.kill_all()
-            except Exception as e:
-                self.log(f"Aviso ao encerrar processos: {e}", "WARNING")
+            def _kill_background():
+                try:
+                    self.manager.kill_all()
+                except Exception:
+                    pass
+            threading.Thread(target=_kill_background, daemon=True).start()
 
         if self.server:
             try:
@@ -1157,6 +1178,7 @@ class ShinyHuntGUI:
                 pass
 
         self.is_hunting = False
+        self.shiny_celebrated = False
         self.btn_start.config(state="normal")
         self.btn_stop.config(state="disabled")
         self.spin_instances.config(state="normal")
@@ -1165,7 +1187,7 @@ class ShinyHuntGUI:
         self.entry_sav.config(state="normal")
         self.entry_port.config(state="normal")
 
-        self.status_badge.config(text="● PARADO", fg=DarkTheme.ACCENT_RED, bg=DarkTheme.SURFACE_1)
+        self.status_badge.config(text="PARADO", fg=DarkTheme.ACCENT_RED, bg=DarkTheme.SURFACE_1)
         self.log("Caçada encerrada.", "INFO")
 
     def _tick_timer(self):
@@ -1181,7 +1203,8 @@ class ShinyHuntGUI:
                 self.lbl_instances_val.config(text=f"{alive} / {self.config.num_instances}")
 
                 # Se todos os processos foram fechados externamente pelo usuário
-                if alive == 0 and len(self.manager.processes) > 0 and not (self.server and self.server.shiny_found):
+                # Não chamar stop_hunt se um shiny foi encontrado (a celebração está em andamento)
+                if alive == 0 and len(self.manager.processes) > 0 and not self.shiny_celebrated and not (self.server and self.server.shiny_found):
                     self.log("Todas as janelas do mGBA foram fechadas.", "WARNING")
                     self.stop_hunt()
 

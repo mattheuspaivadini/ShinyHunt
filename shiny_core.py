@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 shiny_core.py
-Módulo central para o Shiny Charmander Hunter.
+Módulo central para o Hunter Shiny.
 Contém configurações, gerenciador de processos mGBA e servidor TCP de coordenação.
 """
 
@@ -439,6 +439,22 @@ class InstanceManager:
                 proc.kill()
             except Exception:
                 pass
+
+    def find_shiny_instance(self, since: datetime) -> Optional[int]:
+        """Retorna o número da instância cujo save state foi gravado após `since`."""
+        threshold = since.timestamp()
+        best_idx: Optional[int] = None
+        best_mtime = 0.0
+        for i in range(1, self.config.num_instances + 1):
+            inst_dir = self.config.instances_dir / f"instance_{i}"
+            for f in inst_dir.glob("*.ss*"):
+                try:
+                    m = f.stat().st_mtime
+                except OSError:
+                    continue
+                if m >= threshold and m > best_mtime:
+                    best_idx, best_mtime = i, m
+        return best_idx
 
     def alive_count(self) -> int:
         """Retorna quantos processos mGBA ainda estão vivos."""
