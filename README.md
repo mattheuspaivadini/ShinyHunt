@@ -13,7 +13,6 @@ Automação para caça de Pokémon Shiny em Pokémon Fire Red (US) v1.0 utilizan
 - **Anti-determinismo de RNG:** Variação de frames e sementes independentes por instância para evitar repetição de PIDs entre resets e janelas.
 - **Ciclos mais rápidos:** Tempo médio reduzido para ~20 segundos por tentativa (~1.750 tentativas/hora com 10 instâncias a 60 FPS).
 - **Detecção de Save State:** Identificação da instância vencedora por data de modificação do arquivo `.ss1`, evitando fechamento indevido da janela do shiny.
-- **Executável compilado:** Versão pronta para execução em `dist/ShinyHunter.exe`.
 - **Compatível com qualquer inicial:** Funciona com Charmander, Squirtle ou Bulbasaur (basta posicionar o save em frente à Pokébola do inicial desejado).
 
 ### Pré-requisitos
@@ -24,24 +23,17 @@ Automação para caça de Pokémon Shiny em Pokémon Fire Red (US) v1.0 utilizan
 | Emulador | mGBA v0.10+ instalado |
 | ROM | Pokémon Fire Red (US) v1.0 |
 | Save | Arquivo `.sav` salvo em frente à Pokébola do Pokémon inicial desejado |
-| Python (Opcional) | 3.10+ (apenas para executar via código-fonte) |
+| Python | 3.10+ |
 
 ### Como Usar
 
 #### 1. Preparação do Save
 Posicione o personagem em frente à Pokébola do Pokémon inicial escolhido (Charmander, Squirtle ou Bulbasaur) no laboratório do Professor Carvalho, virado para ela e pronto para interagir. Salve o jogo pelo menu e feche o emulador.
 
-#### 2. Inicialização
+#### 2. Execução
 
-**Opção 1 - Executável (dist):**
-Execute o arquivo:
-```text
-dist\ShinyHunter.exe
-```
-
-**Opção 2 - Código-fonte (Python):**
 ```powershell
-# Interface Gráfica
+# Interface Gráfica (Recomendado)
 python shiny_hunter.py
 
 # Linha de Comando (CLI)
@@ -76,23 +68,10 @@ Quando um shiny for detectado:
 | Normal (60 FPS) | ~20,5 s | ~1.750 tent./h | ~4,7 horas |
 | Fast-Forward (4x) | ~5,0 s | ~7.000 tent./h | ~1,2 horas |
 
-### Compilação (PyInstaller)
-
-Para recompilar o executável na pasta `dist`:
-
-```powershell
-python -m PyInstaller --clean --onefile --windowed --name ShinyHunter --add-data "shiny_hunt.lua;." shiny_hunter.py
-Copy-Item "shiny_hunt.lua", "config.json" -Destination "dist\" -Force
-```
-
 ### Estrutura do Projeto
 
 ```text
 ShinyHunt/
-├── dist/
-│   ├── ShinyHunter.exe
-│   ├── shiny_hunt.lua
-│   └── config.json
 ├── shiny_core.py
 ├── shiny_hunter.py
 ├── shiny_hunter_gui.py
@@ -133,7 +112,6 @@ Automated shiny hunting tool for Pokémon Fire Red (US) v1.0 using concurrent mG
 - **RNG Anti-Determinism:** Dynamic frame delays and unique seeds per instance prevent PID repetition across resets and windows.
 - **Faster Cycles:** Average cycle reduced to ~20 seconds per attempt (~1,750 attempts/hour across 10 instances at 60 FPS).
 - **Safe State Detection:** Identifies the winning instance by inspecting `.ss1` file modification timestamp, preventing accidental closure of the shiny window.
-- **Standalone Executable:** Ready-to-run binary in `dist/ShinyHunter.exe`.
 - **Any Starter Supported:** Works with Bulbasaur, Charmander, or Squirtle (just save in front of the desired Pokéball).
 
 ### Prerequisites
@@ -144,22 +122,15 @@ Automated shiny hunting tool for Pokémon Fire Red (US) v1.0 using concurrent mG
 | Emulator | mGBA v0.10+ installed |
 | ROM | Pokémon Fire Red (US) v1.0 |
 | Save | `.sav` file positioned in front of the desired starter Pokéball |
-| Python (Optional) | 3.10+ (only required when running from source) |
+| Python | 3.10+ |
 
 ### Usage Guide
 
 #### 1. Save Preparation
 Position your character in Professor Oak's lab directly in front of the starter Pokéball of your choice, facing it and ready to interact by pressing `A`. Save through the in-game menu and close the emulator.
 
-#### 2. Starting the App
+#### 2. Running
 
-**Option 1 - Binary (dist):**
-Launch:
-```text
-dist\ShinyHunter.exe
-```
-
-**Option 2 - From Source (Python):**
 ```powershell
 # Graphical Interface (GUI)
 python shiny_hunter.py
@@ -194,15 +165,6 @@ In each open mGBA window:
 |---|:---:|:---:|:---:|
 | Normal (60 FPS) | ~20.5 s | ~1,750 att./h | ~4.7 hours |
 | Fast-Forward (4x) | ~5.0 s | ~7,000 att./h | ~1.2 hours |
-
-### Building from Source (PyInstaller)
-
-To rebuild the binary inside the `dist` folder:
-
-```powershell
-python -m PyInstaller --clean --onefile --windowed --name ShinyHunter --add-data "shiny_hunt.lua;." shiny_hunter.py
-Copy-Item "shiny_hunt.lua", "config.json" -Destination "dist\" -Force
-```
 
 ### Technical Specs (Fire Red US v1.0)
 
