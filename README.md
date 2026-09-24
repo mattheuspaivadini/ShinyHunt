@@ -1,153 +1,133 @@
 # Hunter Shiny
 
-Programa automatizado para encontrar um Pokémon Shiny em **Pokémon Fire Red (US) v1.0** usando **10 instâncias simultâneas** de mGBA.
+Automação para caça de Pokémon Shiny em Pokémon Fire Red (US) v1.0 utilizando instâncias simultâneas do mGBA coordenadas via socket TCP.
+
+---
+
+## Recursos Recentes
+
+- **Anti-determinismo de RNG:** Variação de frames e sementes independentes por instância para evitar repetição de PIDs entre resets e janelas.
+- **Ciclos mais rápidos:** Tempo médio reduzido para ~20 segundos por tentativa (~1.750 tentativas/hora com 10 instâncias a 60 FPS).
+- **Detecção de Save State:** Identificação da instância vencedora por data de modificação do arquivo `.ss1`, evitando fechamento indevido da janela do shiny.
+- **Executável compilado:** Versão pronta para execução em `dist/ShinyHunter.exe`.
+
+---
 
 ## Pré-requisitos
 
-| Requisito | Detalhes |
-|-----------|----------|
-| **Sistema** | Windows 10/11 |
-| **mGBA** | v0.10+ instalado em `C:\Program Files\mGBA\mGBA.exe` |
-| **ROM** | Pokémon Fire Red (US) v1.0 em `C:\roms\FireRed.gba` |
-| **Save** | Save posicionado em frente ao Charmander em `C:\roms\FireRed.sav` |
-| **Python** | 3.10+ (não precisa de pip ou pacotes extras) |
+| Item | Especificação |
+|---|---|
+| Sistema | Windows 10/11 (64-bit) |
+| Emulador | mGBA v0.10+ instalado |
+| ROM | Pokémon Fire Red (US) v1.0 |
+| Save | Arquivo `.sav` salvo em frente à Pokébola do Charmander |
+| Python (Opcional) | 3.10+ (apenas para executar via código-fonte) |
+
+---
 
 ## Como Usar
 
-### 1. Preparar o Save
+### 1. Preparação do Save
+Posicione o personagem em frente à Pokébola do Charmander no laboratório do Professor Carvalho, virado para ela e pronto para interagir. Salve o jogo pelo menu e feche o emulador.
 
-Antes de usar o programa, você precisa de um save posicionado no **laboratório do Prof. Oak**, em frente à **Poké Ball do Charmander**. O jogador deve estar de frente para a Poké Ball, pronto para pressionar A e interagir.
+### 2. Inicialização
 
-### 2. Executar o Programa
-
-Você pode executar a aplicação com **Interface Gráfica (GUI)** ou em **Modo Terminal (CLI)**:
-
-#### 🖥️ Modo Interface Gráfica (Recomendado):
-Você pode simplesmente dar um **duplo clique** em `ShinyHunter.exe` na pasta do projeto, ou executar via terminal:
-```powershell
-cd C:\Users\Matheus\Documents\ShinyHunt
-.\ShinyHunter.exe
+**Opção 1 - Executável (dist):**
+Execute o arquivo:
+```text
+dist\ShinyHunter.exe
 ```
-*(ou `python shiny_hunter.py`)*
 
-
-Na interface você poderá:
-- ⏱️ Acompanhar o **tempo decorrido** em tempo real.
-- 🎮 Ver a quantidade de **instâncias abertas/conectadas**.
-- ⚙️ **Modificar a quantidade de instâncias** (ex: 1 a 30) diretamente na interface antes de iniciar.
-- 📁 **Mudar o caminho do emulador mGBA, da ROM (.gba) e do Save (.sav)** através de botões "Procurar..." interativos.
-- 📋 Copiar o caminho do script Lua com um clique.
-- 📊 Ver a tabela de status de cada instância e o console de logs em tempo real.
-- 🌟 Notificação de celebração instantânea ao encontrar o Shiny com dados de PV e OT ID.
-
-#### 💻 Modo Terminal (CLI clássico):
+**Opção 2 - Código-fonte (Python):**
 ```powershell
+# Interface Gráfica
+python shiny_hunter.py
+
+# Linha de Comando (CLI)
 python shiny_hunter.py --cli
 ```
 
-### 3. Carregar o Script Lua
+### 3. Configuração
+Na interface gráfica:
+1. Defina o caminho do executável do mGBA.
+2. Defina os caminhos da ROM (`.gba`) e do Save (`.sav`).
+3. Ajuste a quantidade de instâncias desejada (padrão: 10).
+4. Clique em **Iniciar Caçada**.
 
-Para **CADA** janela do mGBA aberta:
+### 4. Carregar o Script Lua
+Em cada janela aberta do mGBA:
+1. Acesse **Tools** > **Scripting...**
+2. Clique em **File** > **Load script...**
+3. Selecione o arquivo `shiny_hunt.lua`.
 
-1. Menu **Tools** → **Scripting...**
-2. Na janela de scripting: **File** → **Load script...**
-3. Selecione o arquivo `shiny_hunt.lua` (no GUI, clique em *"Copiar Caminho do Script Lua"* para colar diretamente!)
+*Dica: o Fast-Forward do mGBA pode ser usado para acelerar a velocidade da emulação.*
 
-> ⚠️ **IMPORTANTE:** Carregue o script em **todas as janelas**!
+### 5. Finalização
+Quando um shiny for detectado:
+1. A janela que encontrou o shiny salvará o estado no **Slot 1** (`.ss1`).
+2. As demais instâncias receberão comando de parada e serão fechadas.
+3. A janela com o shiny permanecerá aberta com os dados (PID e OTID) exibidos na tela.
 
-### 4. Aguardar
+---
 
-O programa faz tudo automaticamente:
+## Rendimento Estimado
 
-1. 🎮 Navega pela title screen e carrega o save
-2. 🔴 Interage com a Poké Ball e aceita o Charmander
-3. 🔍 Verifica se é shiny (leitura direta da memória RAM)
-4. ❌ Se não for shiny → soft reset e tenta novamente
-5. ★ Se for shiny → salva o save state e encerra as outras instâncias
+| Modo | Tempo por Tentativa | Rendimento (10 instâncias) | Tempo Estimado (1/8192) |
+|---|:---:|:---:|:---:|
+| Normal (60 FPS) | ~20,5 s | ~1.750 tent./h | ~4,7 horas |
+| Fast-Forward (4x) | ~5,0 s | ~7.000 tent./h | ~1,2 horas |
 
-## Estatísticas
+---
 
-| Dado | Valor |
-|------|-------|
-| Chance de shiny (Gen 3) | **1 em 8192** (~0.012%) |
-| Instâncias simultâneas | **Configurável (padrão 10)** |
-| Tempo por tentativa | **~30 segundos** |
-| Tentativas por hora (total) | **~1200** (com 10 instâncias) |
-| Tempo médio esperado | **~7 horas** |
+## Compilação (PyInstaller)
 
-> 💡 A probabilidade é independente por tentativa. Pode demorar mais ou menos!
+Para recompilar o executável na pasta `dist`:
 
-## Arquivos
-
-| Arquivo | Descrição |
-|---------|-----------|
-| `shiny_hunter_gui.py` | Interface Gráfica completa (Tkinter) com monitoramento |
-| `shiny_hunter.py` | Ponto de entrada (inicia o GUI por padrão ou CLI com `--cli`) |
-| `shiny_core.py` | Lógica central: configurações, servidor TCP e instâncias |
-| `shiny_hunt.lua` | Script Lua — automação dentro do mGBA |
-| `config.json` | Configurações persistentes (caminhos, portas, instâncias) |
-| `README.md` | Documentação do projeto |
-
-## Como Funciona
-
-### Arquitetura
-
-```
-┌──────────────┐     TCP/Socket     ┌─────────────────────┐
-│  Python      │◄──────────────────►│  mGBA + Lua (×10)   │
-│  Manager     │    porta 27015     │  shiny_hunt.lua      │
-│              │                    │                     │
-│  - Lança     │  HELLO, ATTEMPT,  │  - State machine    │
-│    10 mGBAs  │  RESET, SHINY     │  - Lê memória RAM   │
-│  - Coordena  │◄──────────────────│  - Mash A automático│
-│  - Mata proc │  STOP, ID         │  - Verifica shiny   │
-│  - Display   │──────────────────►│  - Save state       │
-└──────────────┘                    └─────────────────────┘
+```powershell
+python -m PyInstaller --clean --onefile --windowed --name ShinyHunter --add-data "shiny_hunt.lua;." shiny_hunter.py
+Copy-Item "shiny_hunt.lua", "config.json" -Destination "dist\" -Force
 ```
 
-### Endereços de Memória (Fire Red US v1.0)
+---
 
-| Endereço | Dado | Tipo |
-|----------|------|------|
-| `0x02024284` | Personality Value (PV) do 1º Pokémon | u32 |
-| `0x02024288` | OT ID (TID + SID) do 1º Pokémon | u32 |
+## Estrutura do Projeto
 
-### Fórmula Shiny (Gen 3)
-
+```text
+ShinyHunt/
+├── dist/
+│   ├── ShinyHunter.exe
+│   ├── shiny_hunt.lua
+│   └── config.json
+├── shiny_core.py
+├── shiny_hunter.py
+├── shiny_hunter_gui.py
+├── shiny_hunt.lua
+├── config.json
+└── README.md
 ```
-TID = OTID & 0xFFFF          (16 bits baixos)
-SID = (OTID >> 16) & 0xFFFF  (16 bits altos)
-P1  = (PV >> 16) & 0xFFFF    (16 bits altos do PV)
-P2  = PV & 0xFFFF            (16 bits baixos do PV)
 
-SHINY = (P1 XOR P2 XOR TID XOR SID) < 8
+---
+
+## Especificações Técnicas (Fire Red US v1.0)
+
+### Endereços de Memória
+- **Personality Value (PV/PID):** `0x02024284` (u32)
+- **Trainer ID / Secret ID (OTID):** `0x02024288` (u32)
+
+### Verificação de Shiny (Gen 3)
+```text
+TID = OTID & 0xFFFF
+SID = (OTID >> 16) & 0xFFFF
+P1  = (PV >> 16) & 0xFFFF
+P2  = PV & 0xFFFF
+
+Shiny se: (P1 XOR P2 XOR TID XOR SID) < 8
 ```
+
+---
 
 ## Solução de Problemas
 
-### O script Lua não conecta ao servidor
-- Execute `shiny_hunter.py` **ANTES** de carregar o script Lua
-- O script funciona em **modo standalone** mesmo sem conexão
-- Verifique se nenhum outro programa usa a porta 27015
-
-### O mGBA trava ao carregar o script
-- Verifique se a versão do mGBA é **0.10 ou superior**
-- Reinicie o mGBA e tente novamente
-- O `socket.connect()` pode demorar se o servidor não estiver rodando
-
-### Os botões não estão sendo pressionados corretamente
-- Os timings são calibrados para o fluxo normal do Fire Red
-- Se necessário, ajuste os valores no início de `shiny_hunt.lua`:
-  - `WAIT_AFTER_RESET`: tempo após reset antes de pressionar
-  - `TITLE_MASH_DURATION`: tempo na title screen
-  - `PRESS_INTERVAL`: velocidade de pressionar A
-
-### Endereços de memória incorretos
-- Este programa é feito para **Fire Red (US) v1.0** (Game Code: BPRE Rev 0)
-- Se sua ROM for outra versão ou idioma, os endereços precisam ser ajustados
-- Verifique o console do mGBA para mensagens de erro
-
-### O programa encontra "PV inicial não-zero"
-- Significa que o save já tem um Pokémon na party
-- O save deve estar no ponto **antes** de pegar o Charmander
-- Crie um novo save posicionado em frente à Poké Ball do Charmander
+- **Script Lua em modo standalone:** Inicie o servidor Python antes de carregar o script no mGBA.
+- **Aviso de PV inicial não-zero:** O save utilizado já contém um Pokémon na equipe. Use um save anterior à escolha do inicial.
+- **Porta em uso:** Certifique-se de que nenhum processo anterior do programa permaneceu aberto na porta 27015.
