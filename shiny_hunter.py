@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Hunter Shiny v1.0
-Gerenciador de 10 instâncias mGBA para shiny hunting automatizado
+Gerenciador de instâncias mGBA para shiny hunting automatizado
 Pokemon Fire Red (US) v1.0
 
 Uso: python shiny_hunter.py
@@ -29,7 +29,9 @@ NUM_INSTANCES = 15
 SERVER_PORT = 27015
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
-LUA_SCRIPT = SCRIPT_DIR / "shiny_hunt.lua"
+DEFAULT_LUA_SCRIPT = SCRIPT_DIR / "shiny_hunt.lua"
+MAGIKARP_LUA_SCRIPT = SCRIPT_DIR / "shiny_magi.lua"
+LUA_SCRIPT = MAGIKARP_LUA_SCRIPT if MAGIKARP_LUA_SCRIPT.exists() else DEFAULT_LUA_SCRIPT
 INSTANCES_DIR = Path(ROM_DIR) / "instances"
 
 
@@ -319,14 +321,21 @@ class InstanceManager:
             pass
 
     def _create_instance_lua_script(self, inst_dir, instance_id):
-        """Copia o script Lua para a pasta da instância com o ID pré-definido."""
+        """Copia os scripts Lua para a pasta da instância com o ID pré-definido."""
         try:
-            if not LUA_SCRIPT.exists():
-                return
-            content = LUA_SCRIPT.read_text(encoding="utf-8")
             header = f"-- [Configuracao de Instancia Automatica]\nlocal SCRIPT_INSTANCE_ID = {instance_id}\n\n"
-            inst_lua = inst_dir / "shiny_hunt.lua"
-            inst_lua.write_text(header + content, encoding="utf-8")
+            if LUA_SCRIPT.exists():
+                content = LUA_SCRIPT.read_text(encoding="utf-8")
+                (inst_dir / LUA_SCRIPT.name).write_text(header + content, encoding="utf-8")
+                if LUA_SCRIPT.name != "shiny_hunt.lua":
+                    (inst_dir / "shiny_hunt.lua").write_text(header + content, encoding="utf-8")
+
+            for default_file in (DEFAULT_LUA_SCRIPT, MAGIKARP_LUA_SCRIPT):
+                if default_file.exists():
+                    dst = inst_dir / default_file.name
+                    if not dst.exists() or default_file == LUA_SCRIPT:
+                        text = default_file.read_text(encoding="utf-8")
+                        dst.write_text(header + text, encoding="utf-8")
         except Exception:
             pass
 
@@ -510,6 +519,13 @@ def print_instructions():
     print()
     print(f"  {C.CYAN}{C.BOLD}══ INSTRUÇÕES ══{C.RESET}")
     print()
+    if "magi" in LUA_SCRIPT.name.lower():
+        print(f"  {C.YELLOW}Alvo:{C.RESET} {C.BOLD}Magikarp (Vendedor Rota 4 - Slot Livre){C.RESET}")
+        print(f"  {C.YELLOW}Setup no jogo:{C.RESET} Salve em frente ao vendedor com pelo menos 1 slot livre na party.")
+    else:
+        print(f"  {C.YELLOW}Alvo:{C.RESET} {C.BOLD}Iniciais de Kanto (Bulbasaur / Charmander / Squirtle - Slot 1){C.RESET}")
+        print(f"  {C.YELLOW}Setup no jogo:{C.RESET} Salve em frente à Pokébola do inicial desejado com 0 Pokémon na party.")
+    print()
     print(f"  Para {C.BOLD}CADA{C.RESET} janela do mGBA (todas as {NUM_INSTANCES}):")
     print()
     print(f"    {C.YELLOW}1.{C.RESET} Menu {C.BOLD}Tools{C.RESET} → {C.BOLD}Scripting...{C.RESET}")
@@ -606,8 +622,22 @@ def print_shiny_celebration(info, start_time):
 
 def run_cli():
     """Função principal do programa em modo terminal/CLI."""
+    global LUA_SCRIPT
+
     # Habilita cores ANSI no terminal do Windows
     os.system("")
+
+    # Opções de linha de comando para o alvo
+    if "--iniciais" in sys.argv or "--starters" in sys.argv or "--charmander" in sys.argv:
+        LUA_SCRIPT = DEFAULT_LUA_SCRIPT
+    elif "--magikarp" in sys.argv:
+        LUA_SCRIPT = MAGIKARP_LUA_SCRIPT
+    for i, arg in enumerate(sys.argv):
+        if arg == "--target" and i + 1 < len(sys.argv):
+            target = sys.argv[i + 1].lower()
+            LUA_SCRIPT = MAGIKARP_LUA_SCRIPT if "magi" in target else DEFAULT_LUA_SCRIPT
+        elif arg == "--lua" and i + 1 < len(sys.argv):
+            LUA_SCRIPT = Path(sys.argv[i + 1]).resolve()
 
     print_banner()
     print_prerequisites()

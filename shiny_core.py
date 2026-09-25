@@ -28,15 +28,17 @@ else:
     SCRIPT_DIR = Path(__file__).parent.resolve()
 
 DEFAULT_LUA_PATH = SCRIPT_DIR / "shiny_hunt.lua"
+MAGIKARP_LUA_PATH = SCRIPT_DIR / "shiny_magi.lua"
 
-# Se o script Lua não for encontrado na pasta do .exe, tenta extrair dos arquivos empacotados
-if not DEFAULT_LUA_PATH.exists() and hasattr(sys, "_MEIPASS"):
-    bundled_lua = Path(sys._MEIPASS) / "shiny_hunt.lua"
-    if bundled_lua.exists():
-        try:
-            shutil.copy2(bundled_lua, DEFAULT_LUA_PATH)
-        except Exception:
-            DEFAULT_LUA_PATH = bundled_lua
+# Se algum dos scripts Lua não for encontrado na pasta do .exe, tenta extrair dos arquivos empacotados
+for bundled_name, bundled_var in [("shiny_hunt.lua", DEFAULT_LUA_PATH), ("shiny_magi.lua", MAGIKARP_LUA_PATH)]:
+    if not bundled_var.exists() and hasattr(sys, "_MEIPASS"):
+        bundled = Path(sys._MEIPASS) / bundled_name
+        if bundled.exists():
+            try:
+                shutil.copy2(bundled, bundled_var)
+            except Exception:
+                pass
 
 CONFIG_FILE = SCRIPT_DIR / "config.json"
 
@@ -49,7 +51,8 @@ class HuntConfig:
     sav_path: str = r"C:\roms\FireRed.sav"
     num_instances: int = 10
     server_port: int = 27015
-    lua_script_path: str = str(DEFAULT_LUA_PATH)
+    lua_script_path: str = str(MAGIKARP_LUA_PATH if MAGIKARP_LUA_PATH.exists() else DEFAULT_LUA_PATH)
+    target_pokemon: str = "magikarp"  # "magikarp" ou "charmander"
 
     @property
     def instances_dir(self) -> Path:
@@ -99,7 +102,8 @@ class HuntConfig:
                         sav_path=data.get("sav_path", r"C:\roms\FireRed.sav"),
                         num_instances=int(data.get("num_instances", 10)),
                         server_port=int(data.get("server_port", 27015)),
-                        lua_script_path=data.get("lua_script_path", str(DEFAULT_LUA_PATH)),
+                        lua_script_path=data.get("lua_script_path", str(MAGIKARP_LUA_PATH if MAGIKARP_LUA_PATH.exists() else DEFAULT_LUA_PATH)),
+                        target_pokemon=data.get("target_pokemon", "magikarp"),
                     )
             except Exception:
                 pass
@@ -443,15 +447,24 @@ class InstanceManager:
             pass
 
     def _create_instance_lua_script(self, inst_dir: Path, instance_id: int):
-        """Copia o script Lua para a pasta da instância com o ID pré-definido."""
+        """Copia os scripts Lua para a pasta da instância com o ID pré-definido."""
         try:
-            lua_src = Path(self.config.lua_script_path)
-            if not lua_src.exists():
-                return
-            content = lua_src.read_text(encoding="utf-8")
             header = f"-- [Configuracao de Instancia Automatica]\nlocal SCRIPT_INSTANCE_ID = {instance_id}\n\n"
-            inst_lua = inst_dir / "shiny_hunt.lua"
-            inst_lua.write_text(header + content, encoding="utf-8")
+            lua_src = Path(self.config.lua_script_path)
+            if lua_src.exists():
+                content = lua_src.read_text(encoding="utf-8")
+                (inst_dir / lua_src.name).write_text(header + content, encoding="utf-8")
+                # Se o script selecionado não for shiny_hunt.lua, mantém também como shiny_hunt.lua
+                if lua_src.name != "shiny_hunt.lua":
+                    (inst_dir / "shiny_hunt.lua").write_text(header + content, encoding="utf-8")
+
+            # Garante que tanto shiny_hunt.lua quanto shiny_magi.lua estejam disponíveis na instância
+            for default_file in (DEFAULT_LUA_PATH, MAGIKARP_LUA_PATH):
+                if default_file.exists():
+                    dst = inst_dir / default_file.name
+                    if not dst.exists() or default_file == lua_src:
+                        text = default_file.read_text(encoding="utf-8")
+                        dst.write_text(header + text, encoding="utf-8")
         except Exception:
             pass
 
