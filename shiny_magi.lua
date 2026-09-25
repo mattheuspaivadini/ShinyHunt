@@ -1,30 +1,42 @@
 -- ============================================================
--- Hunter Shiny v1.0
+-- Hunter Shiny v1.0 — Magikarp (Rota 4 - Deteccao de Slot Livre)
 -- Pokemon Fire Red (US) v1.0 — mGBA Automation Script
 -- ============================================================
 -- COMO USAR:
---   1. Execute shiny_hunter.py no terminal PRIMEIRO
---   2. No mGBA: Tools > Scripting
---   3. Na janela de scripting: File > Load script
---   4. Selecione este arquivo (shiny_hunt.lua)
+--   1. No jogo, posicione seu personagem em frente ao vendedor
+--      de Magikarp no Centro Pokemon da Rota 4 (preco: 500 moedas).
+--   2. Certifique-se de ter pelo menos 1 slot livre na sua party
+--      (o script detecta automaticamente o primeiro slot disponivel).
+--   3. Salve o jogo pelo menu (Start > Save) exatamente nessa posicao.
+--   4. Execute shiny_hunter.py (GUI ou CLI).
+--   5. No mGBA: Tools > Scripting > File > Load script.
+--   6. Selecione este arquivo (shiny_magi.lua).
 -- ============================================================
 
--- ==================== CONFIGURAÇÃO ====================
+-- ============================================================
+-- MODO DE TESTE / DEBUG RAPIDO:
+-- Para testar o fluxo de compra, deteccao de slot e salvamento
+-- sem esperar a probabilidade real (1/8192), mude para true:
+local DEBUG_FORCE_SHINY = false          -- true = forca deteccao de shiny para teste
+local DEBUG_FORCE_SHINY_ATTEMPT = 2      -- tentativa em que o shiny sera simulado
+-- ============================================================
 
--- ID pré-definido caso este script tenha sido gerado para uma instância específica
+-- ==================== CONFIGURACAO DO ALVO ====================
+
+-- ID pre-definido caso este script tenha sido gerado para uma instancia especifica
 local SCRIPT_INSTANCE_ID = SCRIPT_INSTANCE_ID or nil
 
--- Servidor Python (para coordenação entre instâncias)
+-- Servidor Python (para coordenacao entre instancias)
 local SERVER_HOST = "127.0.0.1"
 local SERVER_PORT = 27015
 
--- Endereços de memória - Fire Red (US) v1.0 (BPRE Rev 0)
--- A party do jogador começa em 0x02024284
+-- Enderecos de memoria - Fire Red (US) v1.0 (BPRE Rev 0)
+-- A party do jogador comeca em 0x02024284
 -- Cada Pokemon ocupa 100 bytes (0x64)
--- Offset 0x00 = Personality Value (PV/PID) [u32, não criptografado]
--- Offset 0x04 = OT ID (TID nos 16 bits baixos, SID nos 16 bits altos) [u32, não criptografado]
-local ADDR_PARTY_PV   = 0x02024284  -- Personality Value do 1o Pokemon
-local ADDR_PARTY_OTID = 0x02024288  -- OT ID do 1o Pokemon
+-- Offset 0x00 = Personality Value (PV/PID) [u32, nao criptografado]
+-- Offset 0x04 = OT ID (TID nos 16 bits baixos, SID nos 16 bits altos) [u32, nao criptografado]
+local PARTY_BASE_ADDR = 0x02024284
+local POKEMON_SIZE    = 100  -- 0x64 bytes por Pokemon
 
 -- Constantes de teclas do GBA (C.GBA_KEY)
 local KEY_A      = 0
@@ -43,13 +55,13 @@ local WAIT_AFTER_RESET    = 330   -- 5.5s: espera BIOS + logo Game Freak
 local TITLE_MASH_DURATION = 300   -- 5s: mash A/Start na title screen
 local CONTINUE_DURATION   = 240   -- 4s: selecionar Continue e carregar
 local LOADING_WAIT        = 180   -- 3s: espera o jogo carregar completamente
-local MASH_TIMEOUT        = 5400  -- 90s: timeout para pegar Charmander
-local PRESS_INTERVAL      = 15    -- Pressionar botão a cada 15 frames (~4x/s)
+local MASH_TIMEOUT        = 5400  -- 90s: timeout para comprar Magikarp
+local PRESS_INTERVAL      = 15    -- Pressionar botao a cada 15 frames (~4x/s)
 
--- Atraso extra máximo (em frames) sorteado a cada tentativa (otimizado para velocidade)
-local TITLE_EXTRA_MAX   = 180   -- até 3s a mais na title screen (garante nova seed de boot)
-local LOADING_EXTRA_MAX = 180   -- até 3s a mais após carregar save (garante novos frames de RNG)
-local PRESS_HOLD_FRAMES   = 3     -- Manter botão pressionado por 3 frames
+-- Atraso extra maximo (em frames) sorteado a cada tentativa (garante variacao de RNG)
+local TITLE_EXTRA_MAX     = 180   -- ate 3s a mais na title screen (garante nova seed de boot)
+local LOADING_EXTRA_MAX   = 180   -- ate 3s a mais apos carregar save (garante novos frames de RNG)
+local PRESS_HOLD_FRAMES   = 3     -- Manter botao pressionado por 3 frames
 
 -- ==================== ESTADOS ====================
 
@@ -70,22 +82,28 @@ local STATE = {
 
 local currentState   = STATE.INIT
 local stateFrames    = 0         -- Frames no estado atual
-local totalFrames    = 0         -- Frames totais desde o início
-local attempts       = 0         -- Número de tentativas
-local prevPV         = 0         -- PV anterior (para detectar transição 0 → valor)
+local totalFrames    = 0         -- Frames totais desde o inicio
+local attempts       = 0         -- Numero de tentativas
+local targetSlot     = 0         -- Slot livre detectado dinamicamente (1 a 6)
+local prevPV         = 0         -- PV anterior do slot alvo (para detectar 0 -> valor)
 local sock           = nil       -- Socket TCP para o servidor Python
-local connected      = false     -- Se está conectado ao servidor
-local instanceId     = "?"       -- ID da instância (atribuído pelo servidor)
-local shouldStop     = false     -- Se deve parar (shiny encontrado em outra instância)
-local lastStateName  = ""        -- Para log de mudança de estado
+local connected      = false     -- Se esta conectado ao servidor
+local instanceId     = "?"       -- ID da instancia (atribuido pelo servidor)
+local shouldStop     = false     -- Se deve parar (shiny encontrado em outra instancia)
+local lastStateName  = ""        -- Para log de mudanca de estado
 local titleExtra     = 0         -- sorteado no INIT
 local loadingExtra   = 0         -- sorteado no INIT
 
 -- ==================== FUNÇÕES UTILITÁRIAS ====================
 
---- Detecta o número real desta instância através de múltiplos métodos (ROM header, env, arquivo, script)
+--- Formata um numero como hexadecimal de 8 digitos
+local function hex(val)
+    return string.format("0x%08X", val or 0)
+end
+
+--- Detecta o numero real desta instancia atraves de multiplos metodos
 local function detectInstanceId()
-    -- 1. Definido diretamente no script desta instância
+    -- 1. Definido diretamente no script desta instancia
     if SCRIPT_INSTANCE_ID and type(SCRIPT_INSTANCE_ID) == "number" and SCRIPT_INSTANCE_ID >= 1 and SCRIPT_INSTANCE_ID <= 30 then
         return SCRIPT_INSTANCE_ID
     end
@@ -98,7 +116,7 @@ local function detectInstanceId()
         end
     end
 
-    -- 3. Variável de ambiente repassada no processo
+    -- 3. Variavel de ambiente repassada no processo
     if os and type(os.getenv) == "function" then
         local ok, envVal = pcall(function() return os.getenv("SHINY_INSTANCE_ID") end)
         if ok and envVal then
@@ -109,7 +127,7 @@ local function detectInstanceId()
         end
     end
 
-    -- 4. Arquivo instance_id.txt no diretório da ROM/instância
+    -- 4. Arquivo instance_id.txt no diretorio da ROM/instancia
     if io and type(io.open) == "function" then
         local ok, f = pcall(function() return io.open("instance_id.txt", "r") end)
         if ok and f then
@@ -125,7 +143,7 @@ local function detectInstanceId()
     return nil
 end
 
---- Muda o estado da máquina de estados
+--- Muda o estado da maquina de estados
 local function changeState(newState)
     currentState = newState
     stateFrames = 0
@@ -134,9 +152,13 @@ local function changeState(newState)
     end
 end
 
---- Verifica se um Pokemon é shiny baseado no PV e OTID
---- Fórmula Gen 3: (PV_high XOR PV_low XOR TID XOR SID) < 8
+--- Verifica se um Pokemon eh shiny baseado no PV e OTID
+--- Formula Gen 3: (PV_high XOR PV_low XOR TID XOR SID) < 8
 local function isShiny(pv, otid)
+    if DEBUG_FORCE_SHINY and attempts >= DEBUG_FORCE_SHINY_ATTEMPT then
+        console:log("[DEBUG] Forcando deteccao de Shiny para teste!")
+        return true
+    end
     if pv == 0 then return false end
     local tid = otid & 0xFFFF
     local sid = (otid >> 16) & 0xFFFF
@@ -146,16 +168,20 @@ local function isShiny(pv, otid)
     return xorVal < 8
 end
 
---- Lê o Personality Value do primeiro Pokemon da party (com proteção)
-local function readPV()
-    local ok, val = pcall(function() return emu:read32(ADDR_PARTY_PV) end)
+--- Le o PV de um slot arbitrario da party (1 a 6)
+local function readSlotPV(slot)
+    if not slot or slot < 1 or slot > 6 then return 0 end
+    local addr = PARTY_BASE_ADDR + (slot - 1) * POKEMON_SIZE
+    local ok, val = pcall(function() return emu:read32(addr) end)
     if ok and val then return val end
     return 0
 end
 
---- Lê o OT ID do primeiro Pokemon da party (com proteção)
-local function readOTID()
-    local ok, val = pcall(function() return emu:read32(ADDR_PARTY_OTID) end)
+--- Le o OT ID de um slot arbitrario da party (1 a 6)
+local function readSlotOTID(slot)
+    if not slot or slot < 1 or slot > 6 then return 0 end
+    local addr = PARTY_BASE_ADDR + (slot - 1) * POKEMON_SIZE + 4
+    local ok, val = pcall(function() return emu:read32(addr) end)
     if ok and val then return val end
     return 0
 end
@@ -168,11 +194,6 @@ end
 --- Solta todas as teclas
 local function releaseAll()
     pcall(function() emu:setKeys(0) end)
-end
-
---- Formata um número como hexadecimal de 8 dígitos
-local function hex(val)
-    return string.format("0x%08X", val or 0)
 end
 
 -- ==================== FUNÇÕES DE SOCKET ====================
@@ -217,17 +238,11 @@ end
 local function checkServerMessages()
     if not connected or not sock then return end
 
-    -- pcall retorna (true, result) em sucesso ou (false, errmsg) em erro
-    -- sock:receive retorna data em sucesso ou nil,"timeout" sem dados
     local ok, result = pcall(function()
         return sock:receive(256)
     end)
 
-    -- pcall falhou (erro Lua) — ignorar
-    if not ok then return end
-
-    -- receive retornou nil (timeout/sem dados) — ignorar
-    if not result or type(result) ~= "string" or #result == 0 then return end
+    if not ok or not result or type(result) ~= "string" or #result == 0 then return end
 
     local data = result
 
@@ -266,7 +281,7 @@ local function onFrame()
         checkServerMessages()
     end
 
-    -- Se ainda não tiver ID definido, tenta detectar novamente periodicamente
+    -- Se ainda nao tiver ID definido, tenta detectar novamente periodicamente
     if (instanceId == "?" or instanceId == nil) and totalFrames % 30 == 0 then
         local detected = detectInstanceId()
         if detected then
@@ -282,7 +297,7 @@ local function onFrame()
         end
     end
 
-    -- Se recebeu sinal para parar, não faz nada
+    -- Se recebeu sinal para parar, nao faz nada
     if shouldStop then
         releaseAll()
         return
@@ -291,7 +306,7 @@ local function onFrame()
     -- ========== MÁQUINA DE ESTADOS ==========
 
     if currentState == STATE.INIT then
-        -- ── Início de uma nova tentativa ──
+        -- ── Inicio de uma nova tentativa ──
         if attempts == 0 then
             pcall(function() emu:reset() end)   -- boot limpo na 1ª tentativa
         end
@@ -299,11 +314,12 @@ local function onFrame()
         local instOffset = tonumber(instanceId) or 1
         titleExtra   = (math.random(0, TITLE_EXTRA_MAX) + instOffset * 7) % (TITLE_EXTRA_MAX + 1)
         loadingExtra = (math.random(0, LOADING_EXTRA_MAX) + instOffset * 13) % (LOADING_EXTRA_MAX + 1)
-        prevPV = 0
+        targetSlot   = 0
+        prevPV       = 0
         releaseAll()
 
         console:log("========================================")
-        console:log("  Tentativa #" .. attempts .. "  (Instancia #" .. instanceId .. ")")
+        console:log("  Tentativa #" .. attempts .. "  (Instancia #" .. instanceId .. ") - Magikarp Rota 4")
         console:log("  Delays sorteados: title +" .. titleExtra .. " | loading +" .. loadingExtra)
         console:log("========================================")
 
@@ -350,33 +366,46 @@ local function onFrame()
         end
 
     elseif currentState == STATE.LOADING then
-        -- ── Espera o jogo carregar completamente ──
+        -- ── Espera o jogo carregar completamente e busca o primeiro slot livre ──
         releaseAll()
         if stateFrames >= LOADING_WAIT + loadingExtra then
-            -- Lê o PV inicial (deve ser 0 = party vazia)
-            prevPV = readPV()
-            if prevPV ~= 0 then
-                console:log("[AVISO] PV inicial nao-zero: " .. hex(prevPV))
-                console:log("[AVISO] O save pode ja ter um Pokemon na party!")
-                console:log("[AVISO] Verificando se eh shiny mesmo assim...")
-                changeState(STATE.CHECK_SHINY)
-            else
-                console:log("[State] Interagindo com a Pokeball do Charmander...")
-                changeState(STATE.MASHING)
+            console:log("[Party] Verificando slots da equipe:")
+            local freeSlot = nil
+            for s = 1, 6 do
+                local spv = readSlotPV(s)
+                local isFree = (spv == 0)
+                if isFree and freeSlot == nil then
+                    freeSlot = s
+                end
+                local info = isFree and "Vazio" or ("Ocupado (" .. hex(spv) .. ")")
+                console:log(string.format("  Slot %d: %s", s, info))
             end
+
+            -- Se todos os 6 slots estiverem ocupados
+            if freeSlot == nil then
+                console:log("[ERRO] Party cheia! Todos os 6 slots estao ocupados.")
+                console:log("[ERRO] Deposite pelo menos 1 Pokemon no PC antes de comprar o Magikarp.")
+                changeState(STATE.DONE)
+                return
+            end
+
+            targetSlot = freeSlot
+            prevPV = 0
+            console:log(string.format("[Party] Slot livre identificado: #%d (Magikarp sera recebido aqui)", targetSlot))
+            console:log("[State] Interagindo com o vendedor de Magikarp (500 moedas)...")
+            changeState(STATE.MASHING)
         end
 
     elseif currentState == STATE.MASHING then
-        -- ── Mash A para interagir com a Pokeball e aceitar o Charmander ──
-        -- Monitora o PV a cada frame para detectar quando o Pokemon é recebido
+        -- ── Mash A para conversar com o vendedor, aceitar os 500 yen e comprar o Magikarp ──
+        -- Monitora o PV do slot livre identificado
+        local currentPV = readSlotPV(targetSlot)
 
-        local currentPV = readPV()
-
-        -- Detecta transição: PV foi de 0 → não-zero = Pokemon recebido!
+        -- Detecta transicao: PV foi de 0 -> nao-zero = Magikarp recebido no slot livre!
         if currentPV ~= 0 and prevPV == 0 then
             releaseAll()
             console:log("")
-            console:log("[!!!] Pokemon recebido!")
+            console:log(string.format("[!!!] Magikarp recebido no Slot #%d!", targetSlot))
             console:log("[!!!] PV = " .. hex(currentPV))
             changeState(STATE.CHECK_SHINY)
             return
@@ -391,20 +420,20 @@ local function onFrame()
             releaseAll()
         end
 
-        -- Timeout de segurança
+        -- Timeout de seguranca
         if stateFrames >= MASH_TIMEOUT then
             releaseAll()
-            console:log("[AVISO] Timeout no mashing! Resetando...")
+            console:log("[AVISO] Timeout no mashing com o vendedor! Resetando...")
             changeState(STATE.RESETTING)
         end
 
     elseif currentState == STATE.CHECK_SHINY then
-        -- ── Lê o PV e OTID e verifica se é shiny ──
-        local pv   = readPV()
-        local otid = readOTID()
+        -- ── Le o PV e OTID do slot onde o Magikarp entrou e verifica se eh shiny ──
+        local pv   = readSlotPV(targetSlot)
+        local otid = readSlotOTID(targetSlot)
 
         if pv == 0 then
-            console:log("[AVISO] PV = 0 durante check. Pode ter sido um falso positivo.")
+            console:log(string.format("[AVISO] PV = 0 no Slot #%d durante check. Pode ter sido falso positivo.", targetSlot))
             console:log("[AVISO] Resetando...")
             changeState(STATE.RESETTING)
             return
@@ -416,6 +445,7 @@ local function onFrame()
         local p2     = pv & 0xFFFF
         local xorVal = p1 ~ p2 ~ tid ~ sid
 
+        console:log(string.format("  Slot:     #%d", targetSlot))
         console:log("  PV:       " .. hex(pv))
         console:log("  OTID:     " .. hex(otid))
         console:log("  TID:      " .. tid)
@@ -435,17 +465,18 @@ local function onFrame()
         -- ── SHINY ENCONTRADO! ──
         releaseAll()
 
-        local pv   = readPV()
-        local otid = readOTID()
+        local pv   = readSlotPV(targetSlot)
+        local otid = readSlotOTID(targetSlot)
 
         console:log("*********************************************************")
         console:log("*                                                       *")
-        console:log("*                 SHINY ENCONTRADO!!!                   *")
+        console:log("*           SHINY MAGIKARP ENCONTRADO!!!                *")
         console:log("*                                                       *")
         console:log("*********************************************************")
         console:log("")
         console:log("  Instancia: #" .. instanceId)
         console:log("  Tentativa: #" .. attempts)
+        console:log(string.format("  Slot:      #%d", targetSlot))
         console:log("  PV:        " .. hex(pv))
         console:log("  OTID:      " .. hex(otid))
         console:log("")
@@ -455,20 +486,19 @@ local function onFrame()
             return emu:saveStateSlot(1)
         end)
 
-        -- pcall sucesso e retorno não é explicitamente false = save OK
         if ok and result ~= false then
             console:log("  Save state salvo no Slot 1!")
         else
             console:log("  [AVISO] Nao foi possivel salvar o state no slot 1")
-            -- Tenta salvar em arquivo como fallback
             pcall(function()
-                emu:saveStateFile("shiny_charmander.ss1")
-                console:log("  Save state salvo como 'shiny_charmander.ss1'")
+                emu:saveStateFile("shiny_magikarp.ss1")
+                console:log("  Save state salvo como 'shiny_magikarp.ss1'")
             end)
         end
 
         console:log("")
         console:log("  Voce pode carregar o save state e continuar jogando!")
+        console:log(string.format("  O Magikarp dourado esta no Slot #%d da sua equipe!", targetSlot))
         console:log("")
 
         -- Notifica o servidor Python
@@ -482,6 +512,7 @@ local function onFrame()
         if stateFrames >= 30 then
             sendMessage("RESET|" .. attempts)
             pcall(function() emu:reset() end)
+            targetSlot = 0
             prevPV = 0
             changeState(STATE.INIT)
         end
@@ -496,16 +527,17 @@ end
 
 console:log("")
 console:log("=========================================================")
-console:log("  Hunter Shiny v1.0")
+console:log("  Hunter Shiny v1.0 — Magikarp (Rota 4 - Deteccao de Slot Livre)")
 console:log("  Pokemon Fire Red (US) v1.0")
 console:log("=========================================================")
 console:log("")
-console:log("  Enderecos de memoria:")
-console:log("    Party PV:   " .. hex(ADDR_PARTY_PV))
-console:log("    Party OTID: " .. hex(ADDR_PARTY_OTID))
+console:log("  Configuracao do Alvo:")
+console:log("    Alvo:             Magikarp (Vendedor Centro Pokemon Rota 4)")
+console:log("    Preco:            500 moedas")
+console:log("    Deteccao de Slot: Automatico (procura qualquer slot livre na party)")
 console:log("")
 
--- Tenta identificar a instância localmente antes de conectar
+-- Tenta identificar a instancia localmente antes de conectar
 local detected = detectInstanceId()
 if detected then
     instanceId = tostring(detected)
@@ -534,6 +566,6 @@ end
 callbacks:add("frame", onFrame)
 
 console:log("")
-console:log("  Script carregado! O shiny hunting vai comecar em breve...")
+console:log("  Script carregado! O shiny hunting do Magikarp vai comecar...")
 console:log("  Acompanhe o progresso aqui no console do mGBA.")
 console:log("")

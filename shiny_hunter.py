@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Hunter Shiny v1.0
-Gerenciador de 10 instâncias mGBA para shiny hunting automatizado
+Gerenciador de instâncias mGBA para shiny hunting automatizado
 Pokemon Fire Red (US) v1.0
 
 Uso: python shiny_hunter.py
@@ -29,7 +29,9 @@ NUM_INSTANCES = 15
 SERVER_PORT = 27015
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
-LUA_SCRIPT = SCRIPT_DIR / "shiny_hunt.lua"
+DEFAULT_LUA_SCRIPT = SCRIPT_DIR / "shiny_hunt.lua"
+MAGIKARP_LUA_SCRIPT = SCRIPT_DIR / "shiny_magi.lua"
+LUA_SCRIPT = MAGIKARP_LUA_SCRIPT if MAGIKARP_LUA_SCRIPT.exists() else DEFAULT_LUA_SCRIPT
 INSTANCES_DIR = Path(ROM_DIR) / "instances"
 
 
@@ -118,42 +120,33 @@ class ShinyServer:
             except Exception:
                 pass
 
+    def _assign_free_id_locked(self):
+        """Encontra o menor ID livre entre 1 e NUM_INSTANCES (deve ser chamado com self.lock)."""
+        for i in range(1, NUM_INSTANCES + 1):
+            if i not in self.clients:
+                return i
+        self._next_id += 1
+        return self._next_id
+
     def _accept_loop(self):
         """Loop que aceita novas conexões de instâncias Lua."""
         while self._running and not self.shiny_found:
             try:
                 conn, addr = self.server_socket.accept()
-                with self.lock:
-                    self._next_id += 1
-                    client_id = self._next_id
-                    self.connected_count += 1
-                    self.clients[client_id] = conn
-                    self.instance_stats[client_id] = {
-                        "attempts": 0,
-                        "status": "conectado",
-                    }
-
-                # Envia o ID da instância
-                try:
-                    conn.send(f"ID|{client_id}\n".encode("utf-8"))
-                except Exception:
-                    pass
-
-                # Inicia thread para lidar com esta conexão
                 thread = threading.Thread(
                     target=self._handle_client,
-                    args=(conn, client_id),
+                    args=(conn,),
                     daemon=True,
                 )
                 thread.start()
-
             except socket.timeout:
                 continue
             except OSError:
                 break
 
-    def _handle_client(self, conn, client_id):
+    def _handle_client(self, conn):
         """Lida com mensagens de uma instância Lua."""
+        client_id = None
         buffer = ""
         conn.settimeout(1.0)
         while self._running and not self.shiny_found:
@@ -164,52 +157,116 @@ class ShinyServer:
                 buffer += data.decode("utf-8", errors="replace")
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)
-                    self._process_message(line.strip(), client_id)
+                    raw_msg = line.strip()
+                    if raw_msg:
+                        client_id = self._process_client_message(conn, client_id, raw_msg)
             except socket.timeout:
                 continue
             except (ConnectionResetError, ConnectionAbortedError, OSError):
                 break
 
-        with self.lock:
-            stats = self.instance_stats.get(client_id)
-            if stats and stats["status"] != "★ SHINY!":
-                # Acumula tentativas e remove a entrada para não poluir o display
-                self.banked_attempts += stats.get("attempts", 0)
-                del self.instance_stats[client_id]
-                self.clients.pop(client_id, None)
-                self.connected_count = max(0, self.connected_count - 1)
-                self.total_attempts = self.banked_attempts + sum(
-                    s.get("attempts", 0) for s in self.instance_stats.values()
-                )
+        # Cliente desconectou
+        if client_id is not None:
+            with self.lock:
+                if self.clients.get(client_id) == conn:
+                    self.clients.pop(client_id, None)
+                    self.connected_count = len(self.clients)
+                    stats = self.instance_stats.get(client_id)
+                    if stats and stats["status"] != "★ SHINY!":
+                        stats["status"] = "desconectado"
+                    self.total_attempts = self.banked_attempts + sum(
+                        s.get("attempts", 0) for s in self.instance_stats.values()
+                    )
 
-    def _process_message(self, msg, client_id):
-        """Processa uma mensagem recebida de uma instância Lua."""
-        if not msg:
-            return
-
+    def _process_client_message(self, conn, current_id, msg):
+        """Processa mensagens de um cliente e retorna o ID associado (atual ou novo)."""
         parts = msg.split("|")
         cmd = parts[0]
 
-        with self.lock:
-            if cmd == "HELLO":
-                self.instance_stats[client_id]["status"] = "caçando"
+        if cmd in ("HELLO", "IDENTIFY"):
+            desired_id = None
+            if len(parts) > 1 and parts[1].strip().isdigit():
+                val = int(parts[1].strip())
+                if 1 <= val <= 30:
+                    desired_id = val
 
-            elif cmd == "ATTEMPT":
-                attempt_num = int(parts[1]) if len(parts) > 1 else 0
-                self.instance_stats[client_id]["attempts"] = attempt_num
-                self.instance_stats[client_id]["status"] = "caçando"
+            with self.lock:
+                if desired_id is not None:
+                    client_id = desired_id
+                elif current_id is not None:
+                    client_id = current_id
+                else:
+                    client_id = self._assign_free_id_locked()
+
+                if current_id is not None and current_id != client_id:
+                    if self.clients.get(current_id) == conn:
+                        self.clients.pop(current_id, None)
+
+                old_conn = self.clients.get(client_id)
+                if old_conn and old_conn != conn:
+                    try:
+                        old_conn.close()
+                    except Exception:
+                        pass
+
+                self.clients[client_id] = conn
+                self.connected_count = len(self.clients)
+
+                if client_id not in self.instance_stats:
+                    self.instance_stats[client_id] = {
+                        "attempts": 0,
+                        "status": "caçando",
+                    }
+                else:
+                    self.instance_stats[client_id]["status"] = "caçando"
+
+            try:
+                conn.send(f"ID|{client_id}\n".encode("utf-8"))
+            except Exception:
+                pass
+
+            return client_id
+
+        client_id = current_id
+        if client_id is None:
+            with self.lock:
+                client_id = self._assign_free_id_locked()
+                self.clients[client_id] = conn
+                self.connected_count = len(self.clients)
+                if client_id not in self.instance_stats:
+                    self.instance_stats[client_id] = {
+                        "attempts": 0,
+                        "status": "caçando",
+                    }
+            try:
+                conn.send(f"ID|{client_id}\n".encode("utf-8"))
+            except Exception:
+                pass
+
+        with self.lock:
+            if client_id not in self.instance_stats:
+                self.instance_stats[client_id] = {
+                    "attempts": 0,
+                    "status": "caçando",
+                }
+            stat = self.instance_stats[client_id]
+
+            if cmd == "ATTEMPT":
+                attempt_num = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else stat["attempts"] + 1
+                stat["attempts"] = attempt_num
+                stat["status"] = "caçando"
                 self.total_attempts = self.banked_attempts + sum(
                     s.get("attempts", 0) for s in self.instance_stats.values()
                 )
 
             elif cmd == "RESET":
-                self.instance_stats[client_id]["status"] = "resetando"
+                stat["status"] = "resetando"
 
             elif cmd == "SHINY":
                 self.shiny_found = True
                 pv = parts[1] if len(parts) > 1 else "?"
                 otid = parts[2] if len(parts) > 2 else "?"
-                inst_attempts = parts[3] if len(parts) > 3 else "?"
+                inst_attempts = parts[3] if len(parts) > 3 else str(stat["attempts"])
 
                 self.total_attempts = self.banked_attempts + sum(
                     s.get("attempts", 0) for s in self.instance_stats.values()
@@ -222,15 +279,17 @@ class ShinyServer:
                     "attempts_this_instance": inst_attempts,
                     "total_attempts": self.total_attempts,
                 }
-                self.instance_stats[client_id]["status"] = "★ SHINY!"
+                stat["status"] = "★ SHINY!"
 
                 # Envia STOP para todas as outras instâncias
                 for cid, cconn in self.clients.items():
-                    if cid != client_id:
+                    if cid != client_id and cconn:
                         try:
                             cconn.send(b"STOP\n")
                         except Exception:
                             pass
+
+        return client_id
 
 
 # ======================== GERENCIADOR DE INSTÂNCIAS ========================
@@ -240,6 +299,45 @@ class InstanceManager:
 
     def __init__(self):
         self.processes = []
+
+    @staticmethod
+    def _tag_rom_instance(rom_file, instance_id):
+        """Injeta o ID da instância no byte 0xB5 do header da ROM GBA e recalcula o checksum em 0xBD."""
+        try:
+            with open(rom_file, "r+b") as f:
+                f.seek(0xA0)
+                header_slice = bytearray(f.read(0xBD - 0xA0))
+                if len(header_slice) == (0xBD - 0xA0):
+                    header_slice[0xB5 - 0xA0] = instance_id & 0xFF
+                    calc = 0
+                    for b in header_slice:
+                        calc = (calc - b) & 0xFF
+                    calc = (calc - 0x19) & 0xFF
+                    f.seek(0xB5)
+                    f.write(bytes([instance_id & 0xFF]))
+                    f.seek(0xBD)
+                    f.write(bytes([calc]))
+        except Exception:
+            pass
+
+    def _create_instance_lua_script(self, inst_dir, instance_id):
+        """Copia os scripts Lua para a pasta da instância com o ID pré-definido."""
+        try:
+            header = f"-- [Configuracao de Instancia Automatica]\nlocal SCRIPT_INSTANCE_ID = {instance_id}\n\n"
+            if LUA_SCRIPT.exists():
+                content = LUA_SCRIPT.read_text(encoding="utf-8")
+                (inst_dir / LUA_SCRIPT.name).write_text(header + content, encoding="utf-8")
+                if LUA_SCRIPT.name != "shiny_hunt.lua":
+                    (inst_dir / "shiny_hunt.lua").write_text(header + content, encoding="utf-8")
+
+            for default_file in (DEFAULT_LUA_SCRIPT, MAGIKARP_LUA_SCRIPT):
+                if default_file.exists():
+                    dst = inst_dir / default_file.name
+                    if not dst.exists() or default_file == LUA_SCRIPT:
+                        text = default_file.read_text(encoding="utf-8")
+                        dst.write_text(header + text, encoding="utf-8")
+        except Exception:
+            pass
 
     def setup_instances(self):
         """Cria diretórios de instância com cópias da ROM e SAV."""
@@ -259,11 +357,30 @@ class InstanceManager:
             inst_dir = INSTANCES_DIR / f"instance_{i}"
             inst_dir.mkdir(parents=True, exist_ok=True)
 
+            # Limpa save states antigos de caçadas anteriores
+            for old_ss in inst_dir.glob("*.ss*"):
+                try:
+                    old_ss.unlink()
+                except Exception:
+                    pass
+
             inst_rom = inst_dir / ROM_NAME
             inst_sav = inst_dir / SAV_NAME
 
             shutil.copy2(rom_path, inst_rom)
             shutil.copy2(sav_path, inst_sav)
+
+            # Marca a cópia da ROM com o ID da instância
+            self._tag_rom_instance(inst_rom, i)
+
+            # Cria arquivo instance_id.txt na pasta da instância
+            try:
+                (inst_dir / "instance_id.txt").write_text(f"{i}\n", encoding="utf-8")
+            except Exception:
+                pass
+
+            # Cria script shiny_hunt.lua na pasta da instância
+            self._create_instance_lua_script(inst_dir, i)
 
             # Validação: verifica se as cópias têm o tamanho correto
             if inst_rom.stat().st_size != rom_path.stat().st_size:
@@ -279,10 +396,15 @@ class InstanceManager:
     def launch_instances(self):
         """Lança os processos mGBA."""
         for i in range(1, NUM_INSTANCES + 1):
-            inst_rom = INSTANCES_DIR / f"instance_{i}" / ROM_NAME
+            inst_dir = INSTANCES_DIR / f"instance_{i}"
+            inst_rom = inst_dir / ROM_NAME
+            env = os.environ.copy()
+            env["SHINY_INSTANCE_ID"] = str(i)
             try:
                 proc = subprocess.Popen(
                     [MGBA_PATH, str(inst_rom)],
+                    cwd=str(inst_dir),
+                    env=env,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
@@ -321,7 +443,7 @@ class InstanceManager:
 
     def find_shiny_instance(self, since):
         """Retorna o número da instância cujo save state foi gravado após `since`."""
-        threshold = since.timestamp()
+        threshold = since.timestamp() - 5.0
         best_idx = None
         best_mtime = 0.0
         for i in range(1, NUM_INSTANCES + 1):
@@ -396,6 +518,13 @@ def print_instructions():
     """Exibe instruções para o usuário carregar o script Lua."""
     print()
     print(f"  {C.CYAN}{C.BOLD}══ INSTRUÇÕES ══{C.RESET}")
+    print()
+    if "magi" in LUA_SCRIPT.name.lower():
+        print(f"  {C.YELLOW}Alvo:{C.RESET} {C.BOLD}Magikarp (Vendedor Rota 4 - Slot Livre){C.RESET}")
+        print(f"  {C.YELLOW}Setup no jogo:{C.RESET} Salve em frente ao vendedor com pelo menos 1 slot livre na party.")
+    else:
+        print(f"  {C.YELLOW}Alvo:{C.RESET} {C.BOLD}Iniciais de Kanto (Bulbasaur / Charmander / Squirtle - Slot 1){C.RESET}")
+        print(f"  {C.YELLOW}Setup no jogo:{C.RESET} Salve em frente à Pokébola do inicial desejado com 0 Pokémon na party.")
     print()
     print(f"  Para {C.BOLD}CADA{C.RESET} janela do mGBA (todas as {NUM_INSTANCES}):")
     print()
@@ -493,8 +622,22 @@ def print_shiny_celebration(info, start_time):
 
 def run_cli():
     """Função principal do programa em modo terminal/CLI."""
+    global LUA_SCRIPT
+
     # Habilita cores ANSI no terminal do Windows
     os.system("")
+
+    # Opções de linha de comando para o alvo
+    if "--iniciais" in sys.argv or "--starters" in sys.argv or "--charmander" in sys.argv:
+        LUA_SCRIPT = DEFAULT_LUA_SCRIPT
+    elif "--magikarp" in sys.argv:
+        LUA_SCRIPT = MAGIKARP_LUA_SCRIPT
+    for i, arg in enumerate(sys.argv):
+        if arg == "--target" and i + 1 < len(sys.argv):
+            target = sys.argv[i + 1].lower()
+            LUA_SCRIPT = MAGIKARP_LUA_SCRIPT if "magi" in target else DEFAULT_LUA_SCRIPT
+        elif arg == "--lua" and i + 1 < len(sys.argv):
+            LUA_SCRIPT = Path(sys.argv[i + 1]).resolve()
 
     print_banner()
     print_prerequisites()
@@ -577,10 +720,17 @@ def run_cli():
         # Identifica a instância correta pelo save state
         keep = manager.find_shiny_instance(server.start_time)
         if keep is None:
-            print(f"  {C.warn()} Não foi possível identificar a instância do shiny; nenhuma janela foi fechada.")
-        else:
-            manager.kill_all(keep_instance=keep)
+            print(f"  {C.warn()} Não foi possível identificar o save state recente; mantendo janela #{shiny_instance}.")
+            keep = shiny_instance
+
+        if keep is not None:
+            if str(shiny_instance) != str(keep):
+                print(f"  {C.warn()} Sincronizando: script reportou #{shiny_instance}, mas save state foi na #{keep}.")
+                server.shiny_info["instance"] = keep
             server.shiny_info["dir_instance"] = keep
+            manager.kill_all(keep_instance=keep)
+        else:
+            manager.kill_all()
 
         # Celebração!
         print_shiny_celebration(server.shiny_info, server.start_time)
