@@ -413,6 +413,7 @@ class InstanceManager:
             inst_rom = inst_dir / ROM_NAME
             env = os.environ.copy()
             env["SHINY_INSTANCE_ID"] = str(i)
+            env["SHINY_NUM_INSTANCES"] = str(NUM_INSTANCES)
             if SELECTED_GAME == "emerald":
                 env["SHINY_EMERALD_STARTER"] = TARGET_STARTER
             try:

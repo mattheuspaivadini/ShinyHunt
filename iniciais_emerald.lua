@@ -25,6 +25,7 @@ local DEBUG_FORCE_SHINY_ATTEMPT = 2      -- tentativa em que o shiny sera simula
 
 -- ID pre-definido caso este script tenha sido gerado para uma instancia especifica
 local SCRIPT_INSTANCE_ID = SCRIPT_INSTANCE_ID or nil
+local NUM_INSTANCES_TOTAL = tonumber(os.getenv and os.getenv("SHINY_NUM_INSTANCES")) or 1
 
 -- Inicial desejado para caçar:
 --   "treecko"  = Planta (Move o cursor para a Esquerda ◀)
@@ -67,9 +68,9 @@ local KEY_L      = 9
 local WAIT_AFTER_RESET    = 240   -- ~4.0s: espera BIOS + intro Game Freak
 local MASH_TIMEOUT        = 1800  -- ~30s: timeout de seguranca
 
--- Atraso extra maximo (em frames) sorteado a cada tentativa (garante variacao de RNG)
-local TITLE_EXTRA_MAX     = 180   -- ate 3s a mais na title screen
-local LOADING_EXTRA_MAX   = 120   -- ate 2s a mais apos carregar save
+-- Atraso extra maximo (em frames) para varredura sistematica sem repeticao de RNG
+local TITLE_EXTRA_MAX     = 999    -- era 180 — 1000 valores possíveis
+local LOADING_EXTRA_MAX   = 1999   -- era 120 — 2000 valores possíveis
 
 -- ==================== ESTADOS ====================
 
@@ -506,8 +507,12 @@ local function onFrame()
         -- Re-detecta o alvo dinamicamente para garantir sincronia com a interface
         normalizedStarter, starterDisplayName, targetIdx, targetSpeciesId = getNormalizedStarter(TARGET_STARTER)
 
-        titleExtra   = (math.random(0, TITLE_EXTRA_MAX) + instOffset * 7) % (TITLE_EXTRA_MAX + 1)
-        loadingExtra = (math.random(0, LOADING_EXTRA_MAX) + instOffset * 13) % (LOADING_EXTRA_MAX + 1)
+        -- Varredura sistemática, sem repetição, cobrindo ~2 milhões de deslocamentos de frame.
+        -- Cada (tentativa, instância) usa um índice único — nunca repete um total já testado
+        -- até esgotar TITLE_EXTRA_MAX+1 vezes LOADING_EXTRA_MAX+1 combinações.
+        local index = (attempts - 1) * NUM_INSTANCES_TOTAL + instOffset
+        titleExtra   = index % (TITLE_EXTRA_MAX + 1)
+        loadingExtra = math.floor(index / (TITLE_EXTRA_MAX + 1)) % (LOADING_EXTRA_MAX + 1)
         initialPV = 0
         releaseAll()
 
@@ -879,7 +884,7 @@ local function onFrame()
         console:log("  TID:             " .. tid)
         console:log("  SID:             " .. sid)
         console:log("  XOR:             " .. xorVal .. " (shiny se < 8)")
-        logToFile(string.format("Check: alvo=%s, obtido=%s, PV=%s, OTID=%s, XOR=%d", starterDisplayName, actualName, hex(pv), hex(otid), xorVal))
+        logToFile(string.format("Check: alvo=%s, obtido=%s, PV=%s, OTID=%s, XOR=%d, titleExtra=%d, loadingExtra=%d", starterDisplayName, actualName, hex(pv), hex(otid), xorVal, titleExtra, loadingExtra))
 
         -- Validação estrita de espécie
         local isCorrectSpecies = true
