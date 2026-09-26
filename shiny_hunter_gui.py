@@ -25,11 +25,14 @@ from shiny_core import (
     CONFIG_FILE,
     DEFAULT_LUA_PATH,
     MAGIKARP_LUA_PATH,
+    EMERALD_LUA_PATH,
     HuntConfig,
     InstanceManager,
     ShinyServer,
     calculate_shiny_chance,
+    copy_to_clipboard,
     format_elapsed,
+    register_mgba_recent_script,
 )
 
 # Habilita suporte a High-DPI no Windows para fontes nítidas
@@ -207,14 +210,14 @@ class ShinyHuntGUI:
         )
         title_lbl.pack(anchor="w")
 
-        subtitle_lbl = tk.Label(
+        self.lbl_subtitle = tk.Label(
             title_box,
             text="Pokémon Fire Red (US) v1.0 - Automação Multi-Instância mGBA",
             font=("Segoe UI", 9),
             fg=DarkTheme.TEXT_MUTED,
             bg=DarkTheme.BG_DARK,
         )
-        subtitle_lbl.pack(anchor="w")
+        self.lbl_subtitle.pack(anchor="w")
 
         # Status Badge no canto superior direito
         self.status_badge = tk.Label(
@@ -425,22 +428,67 @@ class ShinyHuntGUI:
         )
         btn_browse_sav.grid(row=2, column=2, sticky="e", pady=4)
 
-        # Linha 4: Alvo da Caçada
+        # Linha 4: Jogo Selecionado
         tk.Label(
-            grid_frame, text="Alvo da Caçada:", font=("Segoe UI", 9), fg=DarkTheme.TEXT_MAIN, bg=DarkTheme.SURFACE_0
+            grid_frame, text="Jogo:", font=("Segoe UI", 9), fg=DarkTheme.TEXT_MAIN, bg=DarkTheme.SURFACE_0
         ).grid(row=3, column=0, sticky="w", pady=4, padx=(0, 8))
 
-        target_frame = tk.Frame(grid_frame, bg=DarkTheme.SURFACE_0)
-        target_frame.grid(row=3, column=1, columnspan=2, sticky="w", pady=4)
+        game_frame = tk.Frame(grid_frame, bg=DarkTheme.SURFACE_0)
+        game_frame.grid(row=3, column=1, columnspan=2, sticky="w", pady=4)
 
-        self.var_target = tk.StringVar(value="magikarp")
+        self.var_game = tk.StringVar(value="firered")
+
+        self.radio_game_fr = tk.Radiobutton(
+            game_frame,
+            text="Pokémon Fire Red",
+            variable=self.var_game,
+            value="firered",
+            command=self._on_game_change,
+            bg=DarkTheme.SURFACE_0,
+            fg=DarkTheme.TEXT_MAIN,
+            selectcolor=DarkTheme.SURFACE_1,
+            activebackground=DarkTheme.SURFACE_0,
+            activeforeground=DarkTheme.ACCENT_ORANGE,
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2",
+        )
+        self.radio_game_fr.pack(side="left", padx=(0, 16))
+
+        self.radio_game_em = tk.Radiobutton(
+            game_frame,
+            text="Pokémon Emerald",
+            variable=self.var_game,
+            value="emerald",
+            command=self._on_game_change,
+            bg=DarkTheme.SURFACE_0,
+            fg=DarkTheme.TEXT_MAIN,
+            selectcolor=DarkTheme.SURFACE_1,
+            activebackground=DarkTheme.SURFACE_0,
+            activeforeground=DarkTheme.ACCENT_GREEN,
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2",
+        )
+        self.radio_game_em.pack(side="left", padx=(0, 10))
+
+        # Linha 5: Alvo da Caçada / Inicial
+        self.lbl_target_title = tk.Label(
+            grid_frame, text="Alvo da Caçada:", font=("Segoe UI", 9), fg=DarkTheme.TEXT_MAIN, bg=DarkTheme.SURFACE_0
+        )
+        self.lbl_target_title.grid(row=4, column=0, sticky="w", pady=4, padx=(0, 8))
+
+        target_container = tk.Frame(grid_frame, bg=DarkTheme.SURFACE_0)
+        target_container.grid(row=4, column=1, columnspan=2, sticky="w", pady=4)
+
+        # Container de opções do Fire Red
+        self.firered_target_frame = tk.Frame(target_container, bg=DarkTheme.SURFACE_0)
+        self.var_firered_target = tk.StringVar(value="magikarp")
 
         self.radio_magi = tk.Radiobutton(
-            target_frame,
+            self.firered_target_frame,
             text="Magikarp (Rota 4 - Slot Livre)",
-            variable=self.var_target,
+            variable=self.var_firered_target,
             value="magikarp",
-            command=self._on_target_change,
+            command=self._on_firered_target_change,
             bg=DarkTheme.SURFACE_0,
             fg=DarkTheme.TEXT_MAIN,
             selectcolor=DarkTheme.SURFACE_1,
@@ -452,11 +500,11 @@ class ShinyHuntGUI:
         self.radio_magi.pack(side="left", padx=(0, 16))
 
         self.radio_char = tk.Radiobutton(
-            target_frame,
+            self.firered_target_frame,
             text="Iniciais (Kanto - Slot 1)",
-            variable=self.var_target,
+            variable=self.var_firered_target,
             value="starters",
-            command=self._on_target_change,
+            command=self._on_firered_target_change,
             bg=DarkTheme.SURFACE_0,
             fg=DarkTheme.TEXT_MAIN,
             selectcolor=DarkTheme.SURFACE_1,
@@ -467,40 +515,63 @@ class ShinyHuntGUI:
         )
         self.radio_char.pack(side="left", padx=(0, 10))
 
-        # Linha 5: Script Lua (.lua)
-        tk.Label(
-            grid_frame, text="Script Lua (.lua):", font=("Segoe UI", 9), fg=DarkTheme.TEXT_MAIN, bg=DarkTheme.SURFACE_0
-        ).grid(row=4, column=0, sticky="w", pady=4, padx=(0, 8))
+        # Container de opções do Emerald (Iniciais na bolsa do Prof. Birch)
+        self.emerald_starter_frame = tk.Frame(target_container, bg=DarkTheme.SURFACE_0)
+        self.var_emerald_starter = tk.StringVar(value="treecko")
 
-        self.entry_lua = tk.Entry(
-            grid_frame,
-            font=("Segoe UI", 9),
-            bg=DarkTheme.SURFACE_1,
+        self.radio_treecko = tk.Radiobutton(
+            self.emerald_starter_frame,
+            text="Treecko (Planta - ◀ Esquerda)",
+            variable=self.var_emerald_starter,
+            value="treecko",
+            command=self._on_emerald_starter_change,
+            bg=DarkTheme.SURFACE_0,
             fg=DarkTheme.TEXT_MAIN,
-            insertbackground=DarkTheme.TEXT_MAIN,
-            relief="flat",
-            bd=0,
-            highlightbackground=DarkTheme.SURFACE_2,
-            highlightthickness=1,
-        )
-        self.entry_lua.grid(row=4, column=1, sticky="ew", pady=4, ipady=4, padx=(0, 8))
-
-        self.btn_browse_lua = tk.Button(
-            grid_frame,
-            text="Procurar...",
-            font=("Segoe UI", 9),
-            bg=DarkTheme.SURFACE_2,
-            fg=DarkTheme.TEXT_MAIN,
-            activebackground=DarkTheme.SURFACE_HOVER,
-            activeforeground=DarkTheme.TEXT_MAIN,
-            relief="flat",
-            bd=0,
-            padx=10,
-            pady=3,
+            selectcolor=DarkTheme.SURFACE_1,
+            activebackground=DarkTheme.SURFACE_0,
+            activeforeground=DarkTheme.ACCENT_GREEN,
+            font=("Segoe UI", 9, "bold"),
             cursor="hand2",
-            command=self._browse_lua,
         )
-        self.btn_browse_lua.grid(row=4, column=2, sticky="e", pady=4)
+        self.radio_treecko.pack(side="left", padx=(0, 14))
+
+        self.radio_torchic = tk.Radiobutton(
+            self.emerald_starter_frame,
+            text="Torchic (Fogo - ● Centro)",
+            variable=self.var_emerald_starter,
+            value="torchic",
+            command=self._on_emerald_starter_change,
+            bg=DarkTheme.SURFACE_0,
+            fg=DarkTheme.TEXT_MAIN,
+            selectcolor=DarkTheme.SURFACE_1,
+            activebackground=DarkTheme.SURFACE_0,
+            activeforeground=DarkTheme.ACCENT_ORANGE,
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2",
+        )
+        self.radio_torchic.pack(side="left", padx=(0, 14))
+
+        self.radio_mudkip = tk.Radiobutton(
+            self.emerald_starter_frame,
+            text="Mudkip (Água - ▶ Direita)",
+            variable=self.var_emerald_starter,
+            value="mudkip",
+            command=self._on_emerald_starter_change,
+            bg=DarkTheme.SURFACE_0,
+            fg=DarkTheme.TEXT_MAIN,
+            selectcolor=DarkTheme.SURFACE_1,
+            activebackground=DarkTheme.SURFACE_0,
+            activeforeground=DarkTheme.ACCENT_BLUE,
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2",
+        )
+        self.radio_mudkip.pack(side="left", padx=(0, 10))
+
+        # Inicialmente exibe o frame de Fire Red
+        self.firered_target_frame.pack(side="left", fill="x")
+
+        # Mantém compatibilidade com referências a self.var_target
+        self.var_target = tk.StringVar(value="magikarp")
 
         # Linha 6: Quantidade de Instâncias e Porta
         extra_opts_frame = tk.Frame(grid_frame, bg=DarkTheme.SURFACE_0)
@@ -765,6 +836,34 @@ class ShinyHuntGUI:
 
     # ── CARREGAMENTO E SALVAMENTO DE CONFIGURAÇÕES ──
 
+    def _update_header_subtitle(self):
+        """Atualiza o subtítulo com o jogo atual."""
+        game = self.var_game.get()
+        if hasattr(self, "lbl_subtitle"):
+            if game == "emerald":
+                self.lbl_subtitle.configure(
+                    text="Pokémon Emerald (US) v1.0 - Automação Multi-Instância mGBA",
+                    fg=DarkTheme.ACCENT_GREEN,
+                )
+            else:
+                self.lbl_subtitle.configure(
+                    text="Pokémon Fire Red (US) v1.0 - Automação Multi-Instância mGBA",
+                    fg=DarkTheme.TEXT_MUTED,
+                )
+
+    def _update_target_frames_visibility(self):
+        """Alterna a exibição dos seletores conforme o jogo escolhido."""
+        game = self.var_game.get()
+        self._update_header_subtitle()
+        if game == "emerald":
+            self.firered_target_frame.pack_forget()
+            self.emerald_starter_frame.pack(side="left", fill="x")
+            self.lbl_target_title.configure(text="Inicial Desejado:")
+        else:
+            self.emerald_starter_frame.pack_forget()
+            self.firered_target_frame.pack(side="left", fill="x")
+            self.lbl_target_title.configure(text="Alvo da Caçada:")
+
     def _populate_config_fields(self):
         """Insere as configurações nos campos da interface."""
         self.entry_mgba.delete(0, tk.END)
@@ -776,15 +875,25 @@ class ShinyHuntGUI:
         self.entry_sav.delete(0, tk.END)
         self.entry_sav.insert(0, self.config.sav_path)
 
-        target = getattr(self.config, "target_pokemon", "magikarp")
-        if target in ("charmander", "starters", "iniciais"):
-            target = "starters"
-        self.var_target.set(target)
+        game = getattr(self.config, "game", "firered")
+        self.var_game.set(game)
 
-        default_for_target = MAGIKARP_LUA_PATH if target == "magikarp" else DEFAULT_LUA_PATH
-        lua_path = getattr(self.config, "lua_script_path", str(default_for_target))
-        self.entry_lua.delete(0, tk.END)
-        self.entry_lua.insert(0, lua_path)
+        emerald_starter = getattr(self.config, "emerald_starter", "treecko")
+        self.var_emerald_starter.set(emerald_starter)
+
+        target = getattr(self.config, "target_pokemon", "magikarp")
+        if target in ("treecko", "torchic", "mudkip"):
+            self.var_emerald_starter.set(target)
+            self.var_game.set("emerald")
+            game = "emerald"
+        elif target in ("charmander", "starters", "iniciais"):
+            self.var_firered_target.set("starters")
+            self.var_game.set("firered")
+        else:
+            self.var_firered_target.set("magikarp")
+
+        self.var_target.set(target)
+        self._update_target_frames_visibility()
 
         self.spin_instances.delete(0, tk.END)
         self.spin_instances.insert(0, str(self.config.num_instances))
@@ -804,9 +913,14 @@ class ShinyHuntGUI:
         except ValueError:
             port = 27015
 
-        target = self.var_target.get()
-        default_for_target = MAGIKARP_LUA_PATH if target == "magikarp" else DEFAULT_LUA_PATH
-        lua_path = self.entry_lua.get().strip() or str(default_for_target)
+        game = self.var_game.get()
+        emerald_starter = self.var_emerald_starter.get()
+        if game == "emerald":
+            target = emerald_starter
+        else:
+            target = self.var_firered_target.get()
+
+        lua_path = str(self._get_active_lua_path())
 
         return HuntConfig(
             mgba_path=self.entry_mgba.get().strip(),
@@ -816,38 +930,85 @@ class ShinyHuntGUI:
             server_port=port,
             lua_script_path=lua_path,
             target_pokemon=target,
+            game=game,
+            emerald_starter=emerald_starter,
         )
+
+    def _get_active_lua_path(self) -> Path:
+        """Retorna o caminho do script Lua correspondente à configuração atual."""
+        game = self.var_game.get()
+        if game == "emerald":
+            return EMERALD_LUA_PATH
+        target = self.var_firered_target.get()
+        if target == "magikarp":
+            return MAGIKARP_LUA_PATH
+        return DEFAULT_LUA_PATH
 
     # ── NAVEGAÇÃO DE ARQUIVOS (FILE DIALOGS) E EVENTOS DE ALVO ──
 
-    def _on_target_change(self):
-        """Atualiza o campo do script Lua ao mudar o alvo da caçada."""
-        target = self.var_target.get()
-        self.entry_lua.delete(0, tk.END)
-        if target == "magikarp":
-            self.entry_lua.insert(0, str(MAGIKARP_LUA_PATH))
-            self.log("Alvo selecionado: Magikarp (Rota 4 - Slot Livre) | Script: shiny_magi.lua", "INFO")
-        else:
-            self.entry_lua.insert(0, str(DEFAULT_LUA_PATH))
-            self.log("Alvo selecionado: Iniciais de Kanto (Slot 1) | Script: shiny_hunt.lua", "INFO")
+    def _on_game_change(self):
+        """Callback ao alternar entre Pokémon Fire Red e Pokémon Emerald."""
+        game = self.var_game.get()
+        self._update_target_frames_visibility()
 
-    def _browse_lua(self):
-        """Seleciona um arquivo de script Lua personalizado."""
-        current = self.entry_lua.get().strip()
-        initial_dir = str(Path(current).parent) if current and Path(current).parent.exists() else str(DEFAULT_LUA_PATH.parent)
-        path = filedialog.askopenfilename(
-            title="Selecione o script Lua (.lua)",
-            initialdir=initial_dir,
-            filetypes=[("Script Lua (*.lua)", "*.lua"), ("Todos os arquivos", "*.*")],
-        )
-        if path:
-            p = Path(path).resolve()
-            self.entry_lua.delete(0, tk.END)
-            self.entry_lua.insert(0, str(p))
-            if "magi" in p.name.lower():
-                self.var_target.set("magikarp")
-            elif "hunt" in p.name.lower():
-                self.var_target.set("starters")
+        if game == "emerald":
+            starter = self.var_emerald_starter.get()
+            self.var_target.set(starter)
+            self.log(f"Jogo alterado para: Pokémon Emerald | Inicial: {starter.capitalize()} | Script: iniciais_emerald.lua", "INFO")
+        else:
+            target = self.var_firered_target.get()
+            self.var_target.set(target)
+            if target == "magikarp":
+                self.log("Jogo alterado para: Pokémon Fire Red | Alvo: Magikarp | Script: shiny_magi.lua", "INFO")
+            else:
+                self.log("Jogo alterado para: Pokémon Fire Red | Alvo: Iniciais de Kanto | Script: shiny_hunt.lua", "INFO")
+
+    def _on_emerald_starter_change(self):
+        """Callback ao selecionar um dos iniciais de Hoenn (Emerald)."""
+        starter = self.var_emerald_starter.get()
+        self.var_target.set(starter)
+
+        # Atualiza imediatamente TARGET_STARTER no arquivo iniciais_emerald.lua raiz e em dist (idênticos)
+        try:
+            starter_val = starter.strip().lower()
+            if EMERALD_LUA_PATH.exists():
+                import re
+                txt = EMERALD_LUA_PATH.read_text(encoding="utf-8")
+                txt = re.sub(
+                    r'local TARGET_STARTER\s*=\s*.*',
+                    f'local TARGET_STARTER = "{starter_val}"',
+                    txt
+                )
+                EMERALD_LUA_PATH.write_text(txt, encoding="utf-8")
+                dist_lua = EMERALD_LUA_PATH.parent / "dist" / "iniciais_emerald.lua"
+                if dist_lua.exists():
+                    dist_lua.write_text(txt, encoding="utf-8")
+            (EMERALD_LUA_PATH.parent / "emerald_starter.txt").write_text(f"{starter_val}\n", encoding="utf-8")
+        except Exception:
+            pass
+
+        names = {
+            "treecko": "Treecko (Planta - Seta Esquerda ◀)",
+            "torchic": "Torchic (Fogo - Centro ●)",
+            "mudkip": "Mudkip (Água - Seta Direita ▶)",
+        }
+        self.log(f"Inicial de Emerald selecionado: {names.get(starter, starter.capitalize())} | Script: iniciais_emerald.lua", "INFO")
+
+    def _on_firered_target_change(self):
+        """Callback ao alterar o alvo de Fire Red."""
+        target = self.var_firered_target.get()
+        self.var_target.set(target)
+        if target == "magikarp":
+            self.log("Alvo de Fire Red: Magikarp (Rota 4 - Slot Livre) | Script: shiny_magi.lua", "INFO")
+        else:
+            self.log("Alvo de Fire Red: Iniciais de Kanto (Slot 1) | Script: shiny_hunt.lua", "INFO")
+
+    def _on_target_change(self):
+        """Compatibilidade retroativa."""
+        if self.var_game.get() == "emerald":
+            self._on_emerald_starter_change()
+        else:
+            self._on_firered_target_change()
 
     def _browse_mgba(self):
         """Seleciona o executável do mGBA."""
@@ -866,8 +1027,9 @@ class ShinyHuntGUI:
         """Seleciona o arquivo da ROM e auto-preenche o Save se existir."""
         current = self.entry_rom.get().strip()
         initial_dir = str(Path(current).parent) if current and Path(current).parent.exists() else r"C:\roms"
+        game_name = "Pokémon Emerald" if self.var_game.get() == "emerald" else "Pokémon Fire Red"
         path = filedialog.askopenfilename(
-            title="Selecione a ROM de Pokémon Fire Red",
+            title=f"Selecione a ROM de {game_name} (.gba)",
             initialdir=initial_dir,
             filetypes=[("ROM Game Boy Advance (*.gba)", "*.gba"), ("Todos os arquivos", "*.*")],
         )
@@ -875,6 +1037,16 @@ class ShinyHuntGUI:
             rom_path = Path(path).resolve()
             self.entry_rom.delete(0, tk.END)
             self.entry_rom.insert(0, str(rom_path))
+
+            name_lower = rom_path.name.lower()
+            if "emerald" in name_lower:
+                self.var_game.set("emerald")
+                self._update_target_frames_visibility()
+                self._on_game_change()
+            elif "firered" in name_lower or "fire_red" in name_lower:
+                self.var_game.set("firered")
+                self._update_target_frames_visibility()
+                self._on_game_change()
 
             # Sugere automaticamente o Save correspondente na mesma pasta
             suggested_sav = rom_path.with_suffix(".sav")
@@ -896,48 +1068,76 @@ class ShinyHuntGUI:
             self.entry_sav.insert(0, str(Path(path).resolve()))
 
     def _copy_lua_path(self):
-        """Copia o caminho do script Lua para a área de transferência do Windows."""
-        lua_path = self.entry_lua.get().strip() or str(self.config.lua_script_path)
-        lua_name = Path(lua_path).name
+        """Copia o caminho do script Lua para a área de transferência e pré-registra no mGBA (qt.ini)."""
+        lua_target = self._get_active_lua_path().resolve()
+        lua_name = lua_target.name
+
+        # Registra no histórico do mGBA e copia para a área de transferência
+        register_mgba_recent_script(lua_target)
+        copy_to_clipboard(str(lua_target))
         self.root.clipboard_clear()
-        self.root.clipboard_append(lua_path)
-        self.log(f"Caminho do script Lua ({lua_name}) copiado para a área de transferência: {lua_path}", "SUCCESS")
+        self.root.clipboard_append(str(lua_target))
+
+        self.log(f"Script ({lua_name}) pré-registrado no histórico do mGBA e copiado para o Clipboard!", "SUCCESS")
         messagebox.showinfo(
-            "Caminho Copiado!",
-            f"O caminho do script Lua ({lua_name}) foi copiado para a área de transferência:\n\n{lua_path}\n\n"
-            f"No mGBA, acesse:\nTools > Scripting > File > Load script e cole o caminho!",
+            "Script Pré-configurado!",
+            f"O script '{lua_name}' foi configurado no histórico do mGBA e seu caminho foi copiado!\n\n"
+            f"Caminho:\n{lua_target}\n\n"
+            f"COMO CARREGAR NAS JANELAS DO mGBA:\n\n"
+            f"• MÉTODO 1 (1 CLIQUE - Mais Rápido!):\n"
+            f"  Menu Tools > Scripting > File > Recent scripts > clique no 1º item ({lua_name})!\n\n"
+            f"• MÉTODO 2 (Direto com Teclado):\n"
+            f"  Menu Tools > Scripting > aperte Ctrl+O e dê Ctrl+V para colar o caminho!",
         )
 
     def _show_instructions(self):
         """Exibe popup com passo a passo ilustrado."""
-        lua_path = self.entry_lua.get().strip() or str(self.config.lua_script_path)
-        lua_name = Path(lua_path).name
-        target = self.var_target.get()
+        lua_path = self._get_active_lua_path()
+        lua_name = lua_path.name
+        game = self.var_game.get()
 
-        if target == "magikarp":
+        if game == "emerald":
+            starter = self.var_emerald_starter.get()
+            names = {
+                "treecko": "Treecko (Planta - Seta Esquerda ◀)",
+                "torchic": "Torchic (Fogo - Centro ●)",
+                "mudkip": "Mudkip (Água - Seta Direita ▶)",
+            }
             target_info = (
-                "COMO PREPARAR O JOGO (MAGIKARP - ROTA 4):\n"
-                "• Posicione o personagem em frente ao vendedor no Centro Pokémon da Rota 4.\n"
-                "• Tenha pelo menos 1 slot livre na sua party (detectado automaticamente) e pelo menos 500 moedas.\n"
-                "• Salve o jogo pelo menu (Start > Save) exatamente nessa posição.\n\n"
+                f"COMO PREPARAR O JOGO (POKÉMON EMERALD — INICIAL: {starter.upper()}):\n"
+                "• No jogo, fique na Rota 101 em frente à BOLSA do Prof. Birch (quando atacado pelo Zigzagoon).\n"
+                "• Sua party deve estar vazia (0 Pokémon na equipe).\n"
+                "• Salve o jogo pelo menu (Start > Save) exatamente nessa posição.\n"
+                f"• Inicial selecionado: {names.get(starter, starter.capitalize())}.\n"
+                "• O script abrirá a bolsa, moverá o cursor com as setas até o inicial escolhido,\n"
+                "  confirmará com o botão A e verificará o XOR de Shiny no Slot 1!\n\n"
             )
         else:
-            target_info = (
-                "COMO PREPARAR O JOGO (INICIAIS DE KANTO):\n"
-                "• Posicione o personagem em frente à Pokébola do inicial desejado (Bulbasaur, Charmander ou Squirtle) no laboratório do Prof. Carvalho.\n"
-                "• Party com 0 Pokémon (Slot 1 livre).\n"
-                "• Salve o jogo pelo menu (Start > Save) exatamente nessa posição.\n\n"
-            )
+            target = self.var_firered_target.get()
+            if target == "magikarp":
+                target_info = (
+                    "COMO PREPARAR O JOGO (POKÉMON FIRE RED — MAGIKARP):\n"
+                    "• Posicione o personagem em frente ao vendedor no Centro Pokémon da Rota 4.\n"
+                    "• Tenha pelo menos 1 slot livre na sua party e pelo menos 500 moedas.\n"
+                    "• Salve o jogo pelo menu (Start > Save) exatamente nessa posição.\n\n"
+                )
+            else:
+                target_info = (
+                    "COMO PREPARAR O JOGO (POKÉMON FIRE RED — INICIAIS DE KANTO):\n"
+                    "• Posicione o personagem em frente à Pokébola do inicial desejado (Bulbasaur, Charmander ou Squirtle) no laboratório do Prof. Carvalho.\n"
+                    "• Party com 0 Pokémon (Slot 1 livre).\n"
+                    "• Salve o jogo pelo menu (Start > Save) exatamente nessa posição.\n\n"
+                )
 
         msg = (
             f"{target_info}"
             "COMO CARREGAR O SCRIPT LUA NAS JANELAS:\n\n"
-            "1. Clique no botão 'INICIAR CAÇADA'. O programa criará as cópias da ROM e abrirá as janelas do mGBA.\n\n"
+            "1. Clique em 'INICIAR CAÇADA'. O programa abrirá as janelas do mGBA, configurará o histórico do emulador e copiará o caminho para o seu Clipboard!\n\n"
             "2. Para CADA janela do mGBA aberta:\n"
-            "   - No menu superior do mGBA: Tools > Scripting...\n"
-            "   - Na janela de script que abrir: File > Load script...\n"
-            f"   - Selecione o arquivo: {lua_name}\n"
-            f"     (Caminho completo: {lua_path})\n\n"
+            f"   • MÉTODO RÁPIDO (1 CLIQUE):\n"
+            f"     No menu: Tools > Scripting... > File > Recent scripts > clique em {lua_name}!\n\n"
+            f"   • MÉTODO DIRETO COM TECLADO:\n"
+            f"     No menu: Tools > Scripting... > aperte Ctrl+O e depois Ctrl+V (o caminho já está copiado)!\n\n"
             "3. O script conecta automaticamente e a caçada começa!\n"
             "4. Quando o Shiny for encontrado, o programa salvará no Slot 1 e fechará as outras instâncias automaticamente."
         )
@@ -982,6 +1182,17 @@ class ShinyHuntGUI:
         self.config = config
         self.config.save()  # Salva para as próximas execuções
 
+        # Pré-configura o script atual no histórico [recentScripts] do mGBA (qt.ini)
+        # e copia o caminho completo para a Área de Transferência
+        try:
+            target_lua = Path(self.config.lua_script_path).resolve()
+            register_mgba_recent_script(target_lua)
+            copy_to_clipboard(str(target_lua))
+            self.root.clipboard_clear()
+            self.root.clipboard_append(str(target_lua))
+        except Exception:
+            pass
+
         # Atualiza botões e status visual
         self.is_hunting = True
         self.shiny_celebrated = False
@@ -993,8 +1204,6 @@ class ShinyHuntGUI:
         self.entry_rom.config(state="disabled")
         self.entry_sav.config(state="disabled")
         self.entry_port.config(state="disabled")
-        self.entry_lua.config(state="disabled")
-        self.btn_browse_lua.config(state="disabled")
         self.radio_magi.config(state="disabled")
         self.radio_char.config(state="disabled")
 
@@ -1056,7 +1265,11 @@ class ShinyHuntGUI:
             lua_filename = Path(self.config.lua_script_path).name
             self.event_queue.put((
                 "log",
-                (f"LEMBRE-SE: Carregue {lua_filename} nas janelas (Tools > Scripting > Load script).", "WARNING"),
+                (f"DICA RÁPIDA: '{lua_filename}' já está no topo de 'Recent scripts' e no seu Clipboard!", "SUCCESS"),
+            ))
+            self.event_queue.put((
+                "log",
+                ("Nas janelas: Tools > Scripting > File > Recent scripts (ou Ctrl+O > Ctrl+V > Enter).", "WARNING"),
             ))
 
         except Exception as e:
@@ -1276,7 +1489,14 @@ class ShinyHuntGUI:
         otid = info.get("otid", "?")
         total = info.get("total_attempts", "?")
 
+        game_display = "Pokémon Emerald" if self.var_game.get() == "emerald" else "Pokémon Fire Red"
+        target_display = self.var_emerald_starter.get().capitalize() if self.var_game.get() == "emerald" else (
+            "Magikarp" if self.var_firered_target.get() == "magikarp" else "Inicial de Kanto"
+        )
+
         rows = [
+            ("Jogo:", game_display),
+            ("Pokémon Alvo:", target_display),
             ("Instância Vencedora:", f"#{inst_num}"),
             ("Personality Value (PV):", str(pv)),
             ("OT ID do Treinador:", str(otid)),
@@ -1355,8 +1575,6 @@ class ShinyHuntGUI:
         self.entry_rom.config(state="normal")
         self.entry_sav.config(state="normal")
         self.entry_port.config(state="normal")
-        self.entry_lua.config(state="normal")
-        self.btn_browse_lua.config(state="normal")
         self.radio_magi.config(state="normal")
         self.radio_char.config(state="normal")
 

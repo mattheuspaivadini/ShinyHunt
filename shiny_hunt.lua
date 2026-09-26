@@ -2,11 +2,29 @@
 -- Hunter Shiny v1.0
 -- Pokemon Fire Red (US) v1.0 — mGBA Automation Script
 -- ============================================================
--- COMO USAR:
---   1. Execute shiny_hunter.py no terminal PRIMEIRO
---   2. No mGBA: Tools > Scripting
---   3. Na janela de scripting: File > Load script
---   4. Selecione este arquivo (shiny_hunt.lua)
+-- Auto-detecção de Pokémon Emerald:
+-- Se o jogo carregado for Pokémon Emerald (BPEE), redireciona automaticamente para iniciais_emerald.lua
+if emu and type(emu.read32) == "function" then
+    local ok, code = pcall(function() return emu:read32(0x080000AC) end)
+    if ok and code == 0x45455042 then -- 'BPEE'
+        console:log("[ShinyHunt] Detectado Pokemon Emerald (BPEE) rodando com shiny_hunt.lua!")
+        console:log("[ShinyHunt] Carregando automaticamente iniciais_emerald.lua...")
+        local candidates = {
+            "iniciais_emerald.lua",
+            "../iniciais_emerald.lua",
+            "instances/iniciais_emerald.lua",
+            "C:/Users/Matheus/Documents/ShinyHunt/iniciais_emerald.lua",
+            "C:/roms/FireRed/iniciais_emerald.lua"
+        }
+        for _, path in ipairs(candidates) do
+            local fOk, chunk = pcall(loadfile, path)
+            if fOk and chunk then
+                chunk()
+                return
+            end
+        end
+    end
+end
 -- ============================================================
 
 -- ==================== CONFIGURAÇÃO ====================

@@ -29,9 +29,14 @@ else:
 
 DEFAULT_LUA_PATH = SCRIPT_DIR / "shiny_hunt.lua"
 MAGIKARP_LUA_PATH = SCRIPT_DIR / "shiny_magi.lua"
+EMERALD_LUA_PATH = SCRIPT_DIR / "iniciais_emerald.lua"
 
 # Se algum dos scripts Lua não for encontrado na pasta do .exe, tenta extrair dos arquivos empacotados
-for bundled_name, bundled_var in [("shiny_hunt.lua", DEFAULT_LUA_PATH), ("shiny_magi.lua", MAGIKARP_LUA_PATH)]:
+for bundled_name, bundled_var in [
+    ("shiny_hunt.lua", DEFAULT_LUA_PATH),
+    ("shiny_magi.lua", MAGIKARP_LUA_PATH),
+    ("iniciais_emerald.lua", EMERALD_LUA_PATH),
+]:
     if not bundled_var.exists() and hasattr(sys, "_MEIPASS"):
         bundled = Path(sys._MEIPASS) / bundled_name
         if bundled.exists():
@@ -43,6 +48,30 @@ for bundled_name, bundled_var in [("shiny_hunt.lua", DEFAULT_LUA_PATH), ("shiny_
 CONFIG_FILE = SCRIPT_DIR / "config.json"
 
 
+def sync_lua_scripts():
+    """Garante que todos os scripts Lua em dist sejam exatamente idênticos aos da raiz do projeto."""
+    try:
+        if SCRIPT_DIR.name.lower() == "dist":
+            dist_dir = SCRIPT_DIR
+            root_dir = SCRIPT_DIR.parent
+        else:
+            root_dir = SCRIPT_DIR
+            dist_dir = SCRIPT_DIR / "dist"
+
+        dist_dir.mkdir(parents=True, exist_ok=True)
+
+        # Remove subpasta dist aninhada acidental se existir
+        nested_dist = dist_dir / "dist"
+        if nested_dist.exists() and nested_dist.is_dir():
+            shutil.rmtree(nested_dist, ignore_errors=True)
+
+        for lua_file in root_dir.glob("*.lua"):
+            target_dist = dist_dir / lua_file.name
+            shutil.copy2(lua_file, target_dist)
+    except Exception:
+        pass
+
+
 @dataclass
 class HuntConfig:
     """Configurações da caçada."""
@@ -52,7 +81,9 @@ class HuntConfig:
     num_instances: int = 10
     server_port: int = 27015
     lua_script_path: str = str(MAGIKARP_LUA_PATH if MAGIKARP_LUA_PATH.exists() else DEFAULT_LUA_PATH)
-    target_pokemon: str = "magikarp"  # "magikarp" ou "charmander"
+    target_pokemon: str = "magikarp"  # "magikarp", "charmander", "starters", "treecko", "torchic", "mudkip"
+    game: str = "firered"  # "firered" ou "emerald"
+    emerald_starter: str = "treecko"  # "treecko", "torchic", "mudkip"
 
     @property
     def instances_dir(self) -> Path:
@@ -96,14 +127,23 @@ class HuntConfig:
             try:
                 with open(target, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                    game = data.get("game", "firered")
+                    emerald_starter = data.get("emerald_starter", "treecko")
+                    default_lua = (
+                        str(EMERALD_LUA_PATH if EMERALD_LUA_PATH.exists() else DEFAULT_LUA_PATH)
+                        if game == "emerald"
+                        else str(MAGIKARP_LUA_PATH if MAGIKARP_LUA_PATH.exists() else DEFAULT_LUA_PATH)
+                    )
                     return cls(
                         mgba_path=data.get("mgba_path", r"C:\Program Files\mGBA\mGBA.exe"),
                         rom_path=data.get("rom_path", r"C:\roms\FireRed.gba"),
                         sav_path=data.get("sav_path", r"C:\roms\FireRed.sav"),
                         num_instances=int(data.get("num_instances", 10)),
                         server_port=int(data.get("server_port", 27015)),
-                        lua_script_path=data.get("lua_script_path", str(MAGIKARP_LUA_PATH if MAGIKARP_LUA_PATH.exists() else DEFAULT_LUA_PATH)),
+                        lua_script_path=data.get("lua_script_path", default_lua),
                         target_pokemon=data.get("target_pokemon", "magikarp"),
+                        game=game,
+                        emerald_starter=emerald_starter,
                     )
             except Exception:
                 pass
@@ -128,6 +168,88 @@ def calculate_shiny_chance(total_attempts: int, base_chance: int = 8192) -> floa
     # 1 - ((N - 1) / N) ^ total_attempts
     prob = 1.0 - ((base_chance - 1) / base_chance) ** total_attempts
     return prob * 100.0
+
+
+def copy_to_clipboard(text: str) -> bool:
+    """Copia uma string para a área de transferência do Windows."""
+    if not text:
+        return False
+    try:
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.run(
+            ["clip"],
+            input=text.strip().encode("utf-16le"),
+            check=True,
+            creationflags=creationflags,
+        )
+        return True
+    except Exception:
+        pass
+    try:
+        import tkinter as tk
+        r = tk.Tk()
+        r.withdraw()
+        r.clipboard_clear()
+        r.clipboard_append(text.strip())
+        r.update()
+        r.destroy()
+        return True
+    except Exception:
+        pass
+    return False
+
+
+def register_mgba_recent_script(script_path: Path) -> bool:
+    """
+    Insere o script especificado no topo da lista [recentScripts] do mGBA (qt.ini).
+    Assim, ao abrir o mGBA e ir em Tools > Scripting > File > Recent scripts,
+    o script atual estará imediatamente disponível na 1ª posição (slot 0).
+    """
+    try:
+        appdata = os.environ.get("APPDATA", "")
+        if not appdata:
+            return False
+        ini_path = Path(appdata) / "mGBA" / "qt.ini"
+        if not ini_path.parent.exists():
+            ini_path.parent.mkdir(parents=True, exist_ok=True)
+
+        clean_path = str(Path(script_path).resolve()).replace("\\", "/")
+        existing_scripts: List[str] = []
+
+        content = ""
+        if ini_path.exists():
+            try:
+                content = ini_path.read_text(encoding="utf-8")
+            except Exception:
+                content = ini_path.read_text(encoding="latin-1", errors="ignore")
+
+        import re
+        match = re.search(r"\[recentScripts\]\s*([\s\S]*?)(?=\n\[|\Z)", content)
+        if match:
+            for line in match.group(1).splitlines():
+                line = line.strip()
+                if "=" in line:
+                    _, val = line.split("=", 1)
+                    val = val.strip().strip('"').replace("\\", "/")
+                    if val and val.lower() != clean_path.lower() and val not in existing_scripts:
+                        existing_scripts.append(val)
+
+        new_list = [clean_path] + existing_scripts[:9]
+        lines = ["[recentScripts]"]
+        for idx, s in enumerate(new_list):
+            lines.append(f"{idx}={s}")
+        new_section = "\n".join(lines)
+
+        if match:
+            new_content = content[:match.start()] + new_section + content[match.end():]
+        else:
+            new_content = content.rstrip() + ("\n\n" if content else "") + new_section + "\n"
+
+        ini_path.write_text(new_content, encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
 
 
 class ShinyServer:
@@ -446,28 +568,6 @@ class InstanceManager:
         except Exception:
             pass
 
-    def _create_instance_lua_script(self, inst_dir: Path, instance_id: int):
-        """Copia os scripts Lua para a pasta da instância com o ID pré-definido."""
-        try:
-            header = f"-- [Configuracao de Instancia Automatica]\nlocal SCRIPT_INSTANCE_ID = {instance_id}\n\n"
-            lua_src = Path(self.config.lua_script_path)
-            if lua_src.exists():
-                content = lua_src.read_text(encoding="utf-8")
-                (inst_dir / lua_src.name).write_text(header + content, encoding="utf-8")
-                # Se o script selecionado não for shiny_hunt.lua, mantém também como shiny_hunt.lua
-                if lua_src.name != "shiny_hunt.lua":
-                    (inst_dir / "shiny_hunt.lua").write_text(header + content, encoding="utf-8")
-
-            # Garante que tanto shiny_hunt.lua quanto shiny_magi.lua estejam disponíveis na instância
-            for default_file in (DEFAULT_LUA_PATH, MAGIKARP_LUA_PATH):
-                if default_file.exists():
-                    dst = inst_dir / default_file.name
-                    if not dst.exists() or default_file == lua_src:
-                        text = default_file.read_text(encoding="utf-8")
-                        dst.write_text(header + text, encoding="utf-8")
-        except Exception:
-            pass
-
     def setup_instances(self) -> List[Path]:
         """Cria os diretórios e copia os arquivos ROM e SAV para cada instância."""
         rom_path = Path(self.config.rom_path)
@@ -497,6 +597,13 @@ class InstanceManager:
                 except Exception:
                     pass
 
+            # Remove scripts Lua residuais caso existam de execuções anteriores (scripts ficam apenas na raiz e em dist)
+            for old_lua in inst_dir.glob("*.lua"):
+                try:
+                    old_lua.unlink()
+                except Exception:
+                    pass
+
             inst_rom = inst_dir / rom_name
             inst_sav = inst_dir / sav_name
 
@@ -512,8 +619,12 @@ class InstanceManager:
             except Exception:
                 pass
 
-            # Cria script shiny_hunt.lua com ID pré-configurado na pasta da instância
-            self._create_instance_lua_script(inst_dir, i)
+            # Se for Pokémon Emerald, cria arquivo emerald_starter.txt na pasta da instância
+            if self.config.game == "emerald":
+                try:
+                    (inst_dir / "emerald_starter.txt").write_text(f"{self.config.emerald_starter}\n", encoding="utf-8")
+                except Exception:
+                    pass
 
             # Validação rápida de integridade de tamanho
             if inst_rom.stat().st_size != rom_path.stat().st_size:
@@ -521,7 +632,47 @@ class InstanceManager:
             if inst_sav.stat().st_size != sav_path.stat().st_size:
                 raise IOError(f"Cópia do SAV corrompida na instância {i}")
 
+        # Para Emerald, sincroniza TARGET_STARTER no script raiz e grava emerald_starter.txt
+        if self.config.game == "emerald":
+            try:
+                starter_chosen = self.config.emerald_starter.strip().lower()
+                (SCRIPT_DIR / "emerald_starter.txt").write_text(f"{starter_chosen}\n", encoding="utf-8")
+                try:
+                    (Path(self.config.rom_path).parent / "emerald_starter.txt").write_text(f"{starter_chosen}\n", encoding="utf-8")
+                except Exception:
+                    pass
+
+                # Atualiza diretamente o script raiz iniciais_emerald.lua
+                if EMERALD_LUA_PATH.exists():
+                    import re
+                    lua_text = EMERALD_LUA_PATH.read_text(encoding="utf-8")
+                    lua_text = re.sub(
+                        r'local TARGET_STARTER\s*=\s*.*',
+                        f'local TARGET_STARTER = "{starter_chosen}"',
+                        lua_text
+                    )
+                    EMERALD_LUA_PATH.write_text(lua_text, encoding="utf-8")
+                    dist_lua = SCRIPT_DIR / "dist" / "iniciais_emerald.lua"
+                    if dist_lua.exists():
+                        dist_lua.write_text(lua_text, encoding="utf-8")
+            except Exception:
+                pass
+
+        # Sincroniza todos os scripts Lua para a pasta dist para garantir igualdade com a raiz
+        sync_lua_scripts()
+
+        # Pré-configura o script atual no histórico [recentScripts] do mGBA (qt.ini)
+        # e copia automaticamente o caminho completo para a Área de Transferência
+        try:
+            target_lua = Path(self.config.lua_script_path).resolve()
+            register_mgba_recent_script(target_lua)
+            copy_to_clipboard(str(target_lua))
+        except Exception:
+            pass
+
         return self.instance_dirs
+
+    setup_instance = setup_instances  # Alias para compatibilidade retroativa
 
     def launch_instances(self, on_launch: Optional[Callable[[int, int], None]] = None) -> int:
         """
@@ -538,6 +689,8 @@ class InstanceManager:
             inst_rom = inst_dir / rom_name
             env = os.environ.copy()
             env["SHINY_INSTANCE_ID"] = str(i)
+            if self.config.game == "emerald":
+                env["SHINY_EMERALD_STARTER"] = self.config.emerald_starter
             try:
                 proc = subprocess.Popen(
                     [self.config.mgba_path, str(inst_rom)],
