@@ -111,6 +111,15 @@ Shiny se: (P1 XOR P2 XOR TID XOR SID) < 8
 - **Aviso de PV inicial não-zero:** O save utilizado já contém um Pokémon na equipe. Use um save anterior à escolha do inicial (party vazia).
 - **Porta em uso:** Certifique-se de que nenhum processo anterior do programa permaneceu aberto na porta 27015.
 
+### Planos Futuros
+
+- [ ] Shiny hunt dos lendários de Kanto (Fire Red) *(até o momento todos estão pendentes)*
+- [ ] Shiny hunt Snorlax (Fire Red)
+- [ ] Compatibilidade com o Fire Red v1.1
+- [ ] Shiny hunt dos lendários de Hoenn (Emerald) *(até o momento todos estão pendentes)*
+- [ ] Compatibilidade com as outras versões dos jogos (Leaf Green, Ruby, Sapphire)
+- [ ] Funcionalidade com outros jogos da franquia (jogos de NDS)
+
 ---
 
 ## English
@@ -196,3 +205,12 @@ Shiny if: (P1 XOR P2 XOR TID XOR SID) < 8
 - **Lua script in standalone mode:** Start the Python server before loading the script inside mGBA.
 - **Initial non-zero PV warning:** The save file already has a Pokémon in the party. Use a save before picking the starter.
 - **Port in use:** Ensure previous instances using port 27015 are fully closed in Task Manager.
+
+### Future Plans
+
+- [ ] Shiny hunt for Kanto legendaries (Fire Red) *(currently all pending)*
+- [ ] Shiny hunt Snorlax (Fire Red)
+- [ ] Compatibility with Fire Red v1.1
+- [ ] Shiny hunt for Hoenn legendaries (Emerald) *(currently all pending)*
+- [ ] Compatibility with other game versions (Leaf Green, Ruby, Sapphire)
+- [ ] Support for other games in the franchise (NDS games)
