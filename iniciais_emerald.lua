@@ -25,7 +25,16 @@ local DEBUG_FORCE_SHINY_ATTEMPT = 2      -- tentativa em que o shiny sera simula
 
 -- ID pre-definido caso este script tenha sido gerado para uma instancia especifica
 local SCRIPT_INSTANCE_ID = SCRIPT_INSTANCE_ID or nil
-local NUM_INSTANCES_TOTAL = tonumber(os.getenv and os.getenv("SHINY_NUM_INSTANCES")) or 1
+
+-- Total de instancias rodando em paralelo (divide o espaco de varredura entre elas)
+local NUM_INSTANCES_TOTAL = 1
+do
+    local ok, val = pcall(function() return os.getenv("SHINY_NUM_INSTANCES") end)
+    local n = ok and tonumber(val) or nil
+    if n and n >= 1 and n <= 30 then
+        NUM_INSTANCES_TOTAL = math.floor(n)
+    end
+end
 
 -- Inicial desejado para caçar:
 --   "treecko"  = Planta (Move o cursor para a Esquerda ◀)
@@ -68,9 +77,14 @@ local KEY_L      = 9
 local WAIT_AFTER_RESET    = 240   -- ~4.0s: espera BIOS + intro Game Freak
 local MASH_TIMEOUT        = 1800  -- ~30s: timeout de seguranca
 
--- Atraso extra maximo (em frames) para varredura sistematica sem repeticao de RNG
-local TITLE_EXTRA_MAX     = 999    -- era 180 — 1000 valores possíveis
-local LOADING_EXTRA_MAX   = 1999   -- era 120 — 2000 valores possíveis
+-- ESCANEAR TAMANHO da varredura (ver secao 1 de melhorias-shiny-hunter-emerald.md)
+-- O PV do inicial depende da QUANTIDADE TOTAL de frames decorridos desde o reset,
+-- e nao de titleExtra/loadingExtra independentes: o LCG avanca 1x por frame, logo
+--|titleExtra + loadingExtra| que importa. Somas diferentes => resultados diferentes;
+-- pares diferentes com a MESMA soma => MESMO resultado. Portanto a varredura deve
+-- varrer a SOMA (1 dimensao), nunca o par (2 dimensoes).
+local TITLE_EXTRA_MAX     = 999    -- teto do atraso na title screen (~16s), evita espera longa demais nela
+local MAX_TOTAL_EXTRA     = 99999  -- teto do total de frames extras por tentativa (100.000 valores, ~27,7 min no pior caso)
 
 -- ==================== ESTADOS ====================
 
@@ -154,8 +168,8 @@ local connected           = false     -- Se esta conectado ao servidor
 local instanceId          = "?"       -- ID da instancia (atribuido pelo servidor)
 local shouldStop          = false     -- Se deve parar (shiny encontrado em outra instancia)
 local lastStateName       = ""        -- Para log de mudanca de estado
-local titleExtra          = 0         -- sorteado no INIT
-local loadingExtra        = 0         -- sorteado no INIT
+local titleExtra          = 0         -- atraso na title screen, calculado no INIT
+local loadingExtra        = 0         -- atraso apos carregar o save, calculado no INIT
 local targetSettledFrames = 0         -- Frames consecutivos com cursor perfeitamente estabilizado no alvo
 
 -- ==================== FUNÇÕES UTILITÁRIAS ====================
@@ -502,24 +516,30 @@ local function onFrame()
             pcall(function() emu:reset() end)
         end
         attempts = attempts + 1
-        local instOffset = tonumber(instanceId) or 1
 
         -- Re-detecta o alvo dinamicamente para garantir sincronia com a interface
         normalizedStarter, starterDisplayName, targetIdx, targetSpeciesId = getNormalizedStarter(TARGET_STARTER)
 
-        -- Varredura sistemática, sem repetição, cobrindo ~2 milhões de deslocamentos de frame.
-        -- Cada (tentativa, instância) usa um índice único — nunca repete um total já testado
-        -- até esgotar TITLE_EXTRA_MAX+1 vezes LOADING_EXTRA_MAX+1 combinações.
+        -- Varredura sistematica, sem repeticao, sobre a SOMA dos atrasos.
+        -- O RNG avanca 1x por frame, entao o que define o PV e o TOTAL de frames
+        -- extras (titleExtra + loadingExtra). Indexar o par (title, loading) como se
+        -- fossem dimensoes independentes faria combinacoes distintas com a mesma soma
+        -- e, portanto, o mesmo PV -> a varredura saturaria cedo.
+        -- Aqui o indice 0..MAX_TOTAL_EXTRA e decomposto de forma que a soma seja
+        -- exatamente igual ao indice (titleExtra fica limitado, o resto vai para loading).
+        -- Ate MAX_TOTAL_EXTRA cada tentativa usa uma soma inedita, sem colisao.
+        local instOffset = (tonumber(instanceId) or 1) - 1  -- 0-based: cobre index=0 e evita buraco na varredura
         local index = (attempts - 1) * NUM_INSTANCES_TOTAL + instOffset
-        titleExtra   = index % (TITLE_EXTRA_MAX + 1)
-        loadingExtra = math.floor(index / (TITLE_EXTRA_MAX + 1)) % (LOADING_EXTRA_MAX + 1)
+        local totalExtra = index % (MAX_TOTAL_EXTRA + 1)
+        titleExtra     = totalExtra % (TITLE_EXTRA_MAX + 1)
+        loadingExtra   = totalExtra - titleExtra
         initialPV = 0
         releaseAll()
 
         console:log("========================================")
         console:log("  Tentativa #" .. attempts .. "  (Instancia #" .. instanceId .. ")")
         console:log("  Alvo: " .. starterDisplayName)
-        console:log("  Delays: title +" .. titleExtra .. " | loading +" .. loadingExtra)
+        console:log("  Delays: title +" .. titleExtra .. " | loading +" .. loadingExtra .. " (total +" .. totalExtra .. " frames)")
         console:log("========================================")
 
         sendMessage("ATTEMPT|" .. attempts)
@@ -625,27 +645,26 @@ local function onFrame()
         -- DURANTE O CARREGAMENTO DO SAVE, NENHUM BOTAO PODE SER PRESSIONADO!
         releaseAll()
 
-        if isStarterBagOpen() then
-            console:log("[State] Bolsa detectada! Indo para a selecao do inicial...")
-            changeState(STATE.SELECT_STARTER)
-            return
-        end
-
-        if isOverworldOpen() then
-            -- Armazena o PV que estiver na memoria (0 no save normal)
-            initialPV = readPV()
-            console:log("[State] Jogo carregado no Overworld (detectado por memoria)! Interagindo com a bolsa...")
-            logToFile("Jogo carregado no overworld. Interagindo com a bolsa...")
-            changeState(STATE.OPEN_BAG)
-            return
-        end
-
-        -- Fallback de tempo: espera ~90 frames (1.5s) + loadingExtra
+        -- O atraso de loading so vale se for realmente cumprido. Antes, a deteccao por
+        -- memoria (isOverworldOpen) saia daqui imediatamente e descartava loadingExtra
+        -- na maioria das tentativas, reduzindo a varredura a poucos valores.
+        -- Agora a memoria apenas informa que o save carregou; a saida so acontece depois
+        -- de 90 + loadingExtra frames, com o jogo parado e sem botao (o loop principal
+        -- continua rodando, entao o RNG avanca 1x por frame como esperado).
         if stateFrames >= 90 + loadingExtra then
             initialPV = readPV()
-            console:log("[State] Jogo carregado no Overworld (tempo)! Interagindo com a bolsa do Prof. Birch...")
-            logToFile("Jogo carregado no overworld. Interagindo com a bolsa...")
-            changeState(STATE.OPEN_BAG)
+            if isStarterBagOpen() then
+                console:log("[State] Bolsa detectada! Indo para a selecao do inicial...")
+                logToFile("Bolsa detectada apos o atraso de loading. Indo para a selecao...")
+                changeState(STATE.SELECT_STARTER)
+            else
+                console:log("[State] Jogo carregado no Overworld! Interagindo com a bolsa...")
+                logToFile("Jogo carregado no overworld. Interagindo com a bolsa...")
+                changeState(STATE.OPEN_BAG)
+            end
+        elseif isStarterBagOpen() or isOverworldOpen() then
+            -- Save ja carregou, mas o atraso ainda nao terminou: apenas espera em silencio
+            initialPV = readPV()
         end
 
     elseif currentState == STATE.OPEN_BAG then
