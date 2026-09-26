@@ -48,6 +48,30 @@ for bundled_name, bundled_var in [
 CONFIG_FILE = SCRIPT_DIR / "config.json"
 
 
+def sync_lua_scripts():
+    """Garante que todos os scripts Lua em dist sejam exatamente idênticos aos da raiz do projeto."""
+    try:
+        if SCRIPT_DIR.name.lower() == "dist":
+            dist_dir = SCRIPT_DIR
+            root_dir = SCRIPT_DIR.parent
+        else:
+            root_dir = SCRIPT_DIR
+            dist_dir = SCRIPT_DIR / "dist"
+
+        dist_dir.mkdir(parents=True, exist_ok=True)
+
+        # Remove subpasta dist aninhada acidental se existir
+        nested_dist = dist_dir / "dist"
+        if nested_dist.exists() and nested_dist.is_dir():
+            shutil.rmtree(nested_dist, ignore_errors=True)
+
+        for lua_file in root_dir.glob("*.lua"):
+            target_dist = dist_dir / lua_file.name
+            shutil.copy2(lua_file, target_dist)
+    except Exception:
+        pass
+
+
 @dataclass
 class HuntConfig:
     """Configurações da caçada."""
@@ -544,37 +568,6 @@ class InstanceManager:
         except Exception:
             pass
 
-    def _create_instance_lua_script(self, inst_dir: Path, instance_id: int):
-        """Copia os scripts Lua para a pasta da instância com o ID e alvo pré-definidos."""
-        try:
-            starter_val = self.config.emerald_starter if self.config.game == "emerald" else ""
-            header = (
-                f"-- [Configuracao de Instancia Automatica]\n"
-                f"local SCRIPT_INSTANCE_ID = {instance_id}\n"
-                f"local TARGET_STARTER = \"{starter_val}\"\n\n"
-            )
-            # Salva cópias dedicadas com o cabeçalho configurado
-            if EMERALD_LUA_PATH.exists():
-                (inst_dir / "iniciais_emerald.lua").write_text(header + EMERALD_LUA_PATH.read_text(encoding="utf-8"), encoding="utf-8")
-            if MAGIKARP_LUA_PATH.exists():
-                (inst_dir / "shiny_magi.lua").write_text(header + MAGIKARP_LUA_PATH.read_text(encoding="utf-8"), encoding="utf-8")
-            if DEFAULT_LUA_PATH.exists():
-                (inst_dir / "shiny_hunt_firered.lua").write_text(header + DEFAULT_LUA_PATH.read_text(encoding="utf-8"), encoding="utf-8")
-
-            # CRÍTICO: shiny_hunt.lua na instância deve SEMPRE ser o script do jogo atual!
-            # Se for Emerald, shiny_hunt.lua recebe o script de iniciais de Emerald
-            if self.config.game == "emerald":
-                if EMERALD_LUA_PATH.exists():
-                    (inst_dir / "shiny_hunt.lua").write_text(header + EMERALD_LUA_PATH.read_text(encoding="utf-8"), encoding="utf-8")
-            elif self.config.target_pokemon == "magikarp":
-                if MAGIKARP_LUA_PATH.exists():
-                    (inst_dir / "shiny_hunt.lua").write_text(header + MAGIKARP_LUA_PATH.read_text(encoding="utf-8"), encoding="utf-8")
-            else:
-                if DEFAULT_LUA_PATH.exists():
-                    (inst_dir / "shiny_hunt.lua").write_text(header + DEFAULT_LUA_PATH.read_text(encoding="utf-8"), encoding="utf-8")
-        except Exception:
-            pass
-
     def setup_instances(self) -> List[Path]:
         """Cria os diretórios e copia os arquivos ROM e SAV para cada instância."""
         rom_path = Path(self.config.rom_path)
@@ -604,6 +597,13 @@ class InstanceManager:
                 except Exception:
                     pass
 
+            # Remove scripts Lua residuais caso existam de execuções anteriores (scripts ficam apenas na raiz e em dist)
+            for old_lua in inst_dir.glob("*.lua"):
+                try:
+                    old_lua.unlink()
+                except Exception:
+                    pass
+
             inst_rom = inst_dir / rom_name
             inst_sav = inst_dir / sav_name
 
@@ -625,9 +625,6 @@ class InstanceManager:
                     (inst_dir / "emerald_starter.txt").write_text(f"{self.config.emerald_starter}\n", encoding="utf-8")
                 except Exception:
                     pass
-
-            # Cria script shiny_hunt.lua com ID pré-configurado na pasta da instância
-            self._create_instance_lua_script(inst_dir, i)
 
             # Validação rápida de integridade de tamanho
             if inst_rom.stat().st_size != rom_path.stat().st_size:
@@ -661,6 +658,9 @@ class InstanceManager:
             except Exception:
                 pass
 
+        # Sincroniza todos os scripts Lua para a pasta dist para garantir igualdade com a raiz
+        sync_lua_scripts()
+
         # Pré-configura o script atual no histórico [recentScripts] do mGBA (qt.ini)
         # e copia automaticamente o caminho completo para a Área de Transferência
         try:
@@ -671,6 +671,8 @@ class InstanceManager:
             pass
 
         return self.instance_dirs
+
+    setup_instance = setup_instances  # Alias para compatibilidade retroativa
 
     def launch_instances(self, on_launch: Optional[Callable[[int, int], None]] = None) -> int:
         """

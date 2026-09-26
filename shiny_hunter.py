@@ -323,36 +323,6 @@ class InstanceManager:
         except Exception:
             pass
 
-    def _create_instance_lua_script(self, inst_dir, instance_id):
-        """Copia os scripts Lua para a pasta da instância com o ID e alvo pré-definidos."""
-        try:
-            starter_val = TARGET_STARTER if SELECTED_GAME == "emerald" else ""
-            header = (
-                f"-- [Configuracao de Instancia Automatica]\n"
-                f"local SCRIPT_INSTANCE_ID = {instance_id}\n"
-                f"local TARGET_STARTER = \"{starter_val}\"\n\n"
-            )
-            # Salva cópias dedicadas com o cabeçalho configurado
-            if EMERALD_LUA_SCRIPT.exists():
-                (inst_dir / "iniciais_emerald.lua").write_text(header + EMERALD_LUA_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
-            if MAGIKARP_LUA_SCRIPT.exists():
-                (inst_dir / "shiny_magi.lua").write_text(header + MAGIKARP_LUA_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
-            if DEFAULT_LUA_SCRIPT.exists():
-                (inst_dir / "shiny_hunt_firered.lua").write_text(header + DEFAULT_LUA_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
-
-            # CRÍTICO: shiny_hunt.lua na instância deve SEMPRE ser o script do jogo atual!
-            if SELECTED_GAME == "emerald":
-                if EMERALD_LUA_SCRIPT.exists():
-                    (inst_dir / "shiny_hunt.lua").write_text(header + EMERALD_LUA_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
-            elif TARGET_POKEMON == "magikarp":
-                if MAGIKARP_LUA_SCRIPT.exists():
-                    (inst_dir / "shiny_hunt.lua").write_text(header + MAGIKARP_LUA_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
-            else:
-                if DEFAULT_LUA_SCRIPT.exists():
-                    (inst_dir / "shiny_hunt.lua").write_text(header + DEFAULT_LUA_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
-        except Exception:
-            pass
-
     def setup_instances(self):
         """Cria diretórios de instância com cópias da ROM e SAV."""
         rom_path = Path(ROM_DIR) / ROM_NAME
@@ -378,6 +348,13 @@ class InstanceManager:
                 except Exception:
                     pass
 
+            # Remove scripts Lua residuais caso existam de execuções anteriores (scripts ficam apenas na raiz e em dist)
+            for old_lua in inst_dir.glob("*.lua"):
+                try:
+                    old_lua.unlink()
+                except Exception:
+                    pass
+
             inst_rom = inst_dir / ROM_NAME
             inst_sav = inst_dir / SAV_NAME
 
@@ -400,9 +377,6 @@ class InstanceManager:
                 except Exception:
                     pass
 
-            # Cria script shiny_hunt.lua na pasta da instância
-            self._create_instance_lua_script(inst_dir, i)
-
             # Validação: verifica se as cópias têm o tamanho correto
             if inst_rom.stat().st_size != rom_path.stat().st_size:
                 print(f"  {C.cross()} Cópia da ROM corrompida na instância {i}")
@@ -410,6 +384,13 @@ class InstanceManager:
             if inst_sav.stat().st_size != sav_path.stat().st_size:
                 print(f"  {C.cross()} Cópia do SAV corrompida na instância {i}")
                 sys.exit(1)
+
+        # Sincroniza scripts Lua com dist (arquivos ficam apenas na raiz e em dist)
+        try:
+            from shiny_core import sync_lua_scripts
+            sync_lua_scripts()
+        except Exception:
+            pass
 
         # Pré-configura no histórico [recentScripts] do mGBA (qt.ini) e copia para o Clipboard
         try:
@@ -422,6 +403,8 @@ class InstanceManager:
 
         print(f"  {C.check()} {NUM_INSTANCES} diretórios de instância criados em:")
         print(f"      {C.DIM}{INSTANCES_DIR}{C.RESET}")
+
+    setup_instance = setup_instances  # Alias para compatibilidade retroativa
 
     def launch_instances(self):
         """Lança os processos mGBA."""

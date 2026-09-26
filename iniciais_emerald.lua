@@ -43,6 +43,11 @@ local ADDR_PARTY_OTID             = 0x020244F0  -- OT ID do 1o Pokemon
 local ADDR_MAIN_CALLBACK2         = 0x030022C4  -- Ponteiro do loop principal do jogo (gMain.callback2)
 local ADDR_TASK0_FUNC             = 0x03005E00  -- Ponteiro da funcao ativa da Task 0 (gTasks[0].func)
 local ADDR_TASK0_STARTER          = 0x03005E08  -- Indice da selecao na bolsa (gTasks[0].data[0]: 0=Treecko, 1=Torchic, 2=Mudkip)
+
+-- Callbacks conhecidos do Pokemon Emerald US (BPEE)
+local FN_CB2_MAIN_MENU            = 0x081BFAB4  -- Loop do Menu Principal (CB2_MainMenu)
+local FN_CB2_MAIN_MENU_INIT       = 0x081BFDB0  -- Init do Menu Principal (CB2_InitMainMenu)
+local FN_CB2_OVERWORLD            = 0x08038420  -- Loop do Overworld (CB2_Overworld)
 local FN_CB2_STARTER_CHOOSE       = 0x081341E0  -- Callback da tela da bolsa (CB2_StarterChoose)
 local FN_TASK_STARTER_INPUT       = 0x0813425C  -- Funcao que processa as teclas na bolsa (Task_HandleStarterChooseInput)
 
@@ -59,25 +64,20 @@ local KEY_R      = 8
 local KEY_L      = 9
 
 -- Timings (em frames, 60 fps)
-local WAIT_AFTER_RESET    = 360   -- ~6.0s: espera BIOS + intro Game Freak (estrela cadente)
-local TITLE_MASH_DURATION = 240   -- ~4.0s: mash A/Start na title screen (Rayquaza)
-local CONTINUE_DURATION   = 180   -- ~3.0s: selecionar Continue e carregar o save
-local LOADING_WAIT        = 180   -- ~3.0s: espera o jogo carregar no overworld
-local MASH_TIMEOUT        = 3600  -- ~60s: timeout de seguranca
-local PRESS_INTERVAL      = 12    -- Pressionar botao a cada 12 frames (~5x/s)
-local PRESS_HOLD_FRAMES   = 4     -- Manter botao pressionado por 4 frames
+local WAIT_AFTER_RESET    = 240   -- ~4.0s: espera BIOS + intro Game Freak
+local MASH_TIMEOUT        = 1800  -- ~30s: timeout de seguranca
 
 -- Atraso extra maximo (em frames) sorteado a cada tentativa (garante variacao de RNG)
 local TITLE_EXTRA_MAX     = 180   -- ate 3s a mais na title screen
-local LOADING_EXTRA_MAX   = 180   -- ate 3s a mais apos carregar save
+local LOADING_EXTRA_MAX   = 120   -- ate 2s a mais apos carregar save
 
 -- ==================== ESTADOS ====================
 
 local STATE = {
     INIT            = "INIT",
     TITLE_WAIT      = "TITLE_WAIT",
-    TITLE_MASH      = "TITLE_MASH",
-    CONTINUE        = "CONTINUE",
+    TITLE_PRESS     = "TITLE_PRESS",
+    MAIN_MENU       = "MAIN_MENU",
     LOADING         = "LOADING",
     OPEN_BAG        = "OPEN_BAG",
     SELECT_STARTER  = "SELECT_STARTER",
@@ -155,6 +155,7 @@ local shouldStop          = false     -- Se deve parar (shiny encontrado em outr
 local lastStateName       = ""        -- Para log de mudanca de estado
 local titleExtra          = 0         -- sorteado no INIT
 local loadingExtra        = 0         -- sorteado no INIT
+local targetSettledFrames = 0         -- Frames consecutivos com cursor perfeitamente estabilizado no alvo
 
 -- ==================== FUNÇÕES UTILITÁRIAS ====================
 
@@ -205,6 +206,7 @@ end
 local function changeState(newState)
     currentState = newState
     stateFrames = 0
+    targetSettledFrames = 0
     if newState ~= lastStateName then
         lastStateName = newState
     end
@@ -270,11 +272,38 @@ local function isShiny(pv, otid)
     return xorVal < 8
 end
 
+--- Verifica se o Menu Principal (Continue / New Game) esta ativo na memoria
+local function isMainMenuOpen()
+    local ok, cb2 = pcall(function() return emu:read32(ADDR_MAIN_CALLBACK2) end)
+    if ok and cb2 then
+        local c = cb2 & ~1
+        if c == FN_CB2_MAIN_MENU or c == FN_CB2_MAIN_MENU_INIT then
+            return true
+        end
+    end
+    return false
+end
+
+--- Verifica se o jogador esta no Overworld andando no mapa
+local function isOverworldOpen()
+    local ok, cb2 = pcall(function() return emu:read32(ADDR_MAIN_CALLBACK2) end)
+    if ok and cb2 then
+        local c = cb2 & ~1
+        if c == FN_CB2_OVERWORLD or c == 0x080565B4 or c == 0x08059820 then
+            return true
+        end
+    end
+    return false
+end
+
 --- Verifica se a tela da bolsa do Prof. Birch abriu na memoria (SOMENTE LEITURA)
 local function isStarterBagOpen()
     local ok, cb2 = pcall(function() return emu:read32(ADDR_MAIN_CALLBACK2) end)
-    if ok and cb2 and (cb2 & ~1) == FN_CB2_STARTER_CHOOSE then
-        return true
+    if ok and cb2 then
+        local c = cb2 & ~1
+        if c == FN_CB2_STARTER_CHOOSE or c == 0x081341A0 then
+            return true
+        end
     end
     return false
 end
@@ -286,16 +315,55 @@ local function isStarterInputReady()
     if ok and func and (func & ~1) == FN_TASK_STARTER_INPUT then
         return true
     end
+
+    -- Varredura alternativa caso a task de escolha esteja em outro índice (gTasks[0..15])
+    local G_TASKS_BASE = 0x03005E00
+    for t = 0, 15 do
+        local taskAddr = G_TASKS_BASE + (t * 40)
+        local okF, fVal = pcall(function() return emu:read32(taskAddr) end)
+        if okF and fVal and (fVal & ~1) == FN_TASK_STARTER_INPUT then
+            return true
+        end
+    end
+
     return false
 end
 
 --- Le o indice atual da selecao na tela de iniciais (SOMENTE LEITURA)
 --- 0 = Treecko, 1 = Torchic, 2 = Mudkip
 local function getStarterSelection()
+    -- 1. Verifica Task 0 diretamente
     local ok, sel = pcall(function() return emu:read16(ADDR_TASK0_STARTER) end)
+    if ok and sel and sel >= 0 and sel <= 2 then
+        local okF, func = pcall(function() return emu:read32(ADDR_TASK0_FUNC) end)
+        if okF and func then
+            local cleanFunc = func & ~1
+            if cleanFunc == FN_TASK_STARTER_INPUT or cleanFunc == 0x0813423C or cleanFunc == 0x08134641 or cleanFunc == 0x08134775 or cleanFunc == 0x08134341 then
+                return sel
+            end
+        end
+    end
+
+    -- 2. Varredura em todas as 16 tasks (gTasks[0..15])
+    local G_TASKS_BASE = 0x03005E00
+    for t = 0, 15 do
+        local taskAddr = G_TASKS_BASE + (t * 40)
+        local okF, func = pcall(function() return emu:read32(taskAddr) end)
+        if okF and func then
+            local cleanFunc = func & ~1
+            if cleanFunc == FN_TASK_STARTER_INPUT or cleanFunc == 0x08134641 or cleanFunc == 0x08134775 then
+                local okS, val = pcall(function() return emu:read16(taskAddr + 8) end)
+                if okS and val and val >= 0 and val <= 2 then
+                    return val
+                end
+            end
+        end
+    end
+
     if ok and sel and sel >= 0 and sel <= 2 then
         return sel
     end
+
     return -1
 end
 
@@ -454,161 +522,291 @@ local function onFrame()
 
     elseif currentState == STATE.TITLE_WAIT then
         releaseAll()
+
+        -- Se por acaso ja estiver no Menu Principal, Overworld ou Bolsa:
+        if isStarterBagOpen() then
+            console:log("[State] Bolsa detectada precocemente! Indo para selecao...")
+            changeState(STATE.SELECT_STARTER)
+            return
+        elseif isOverworldOpen() then
+            console:log("[State] Overworld detectado precocemente! Indo para interacao com a bolsa...")
+            changeState(STATE.OPEN_BAG)
+            return
+        elseif isMainMenuOpen() then
+            console:log("[State] Menu Principal detectado! Indo para selecao de Continue...")
+            changeState(STATE.MAIN_MENU)
+            return
+        end
+
+        -- Espera intro inicial (~240 frames = 4s) + delay de RNG
         if stateFrames >= WAIT_AFTER_RESET + titleExtra then
-            console:log("[State] Title screen (Rayquaza) - mashing A/Start...")
-            changeState(STATE.TITLE_MASH)
+            console:log("[State] Tela de titulo (Rayquaza) - aguardando/pressionando Start...")
+            changeState(STATE.TITLE_PRESS)
         end
 
-    elseif currentState == STATE.TITLE_MASH then
-        local cycle = stateFrames % PRESS_INTERVAL
+    elseif currentState == STATE.TITLE_PRESS then
+        -- Se ja detectou Menu Principal, Overworld ou Bolsa:
+        if isStarterBagOpen() then
+            releaseAll()
+            console:log("[State] Bolsa detectada! Indo para a selecao do inicial...")
+            changeState(STATE.SELECT_STARTER)
+            return
+        elseif isOverworldOpen() then
+            releaseAll()
+            console:log("[State] Overworld detectado! Indo para a interacao com a bolsa...")
+            changeState(STATE.OPEN_BAG)
+            return
+        elseif isMainMenuOpen() then
+            releaseAll()
+            console:log("[State] Menu Principal carregado! Selecionando Continue...")
+            changeState(STATE.MAIN_MENU)
+            return
+        end
+
+        -- Pressiona START de forma cadenciada a cada 30 frames (4 frames segurando, 26 solto)
+        -- para avancar da tela de titulo SEM spamar botoes
+        local cycle = stateFrames % 30
         if cycle == 0 then
-            pressKeys((1 << KEY_A) | (1 << KEY_START))
-        elseif cycle == PRESS_HOLD_FRAMES then
+            pressKey(KEY_START)
+        elseif cycle == 4 then
             releaseAll()
         end
 
-        if stateFrames >= TITLE_MASH_DURATION then
+        -- Timeout de seguranca: apos 180 frames (~3s), avanca para o MAIN_MENU
+        if stateFrames >= 180 then
             releaseAll()
-            console:log("[State] Selecionando Continue...")
-            changeState(STATE.CONTINUE)
+            console:log("[State] Avancando para o Menu Principal...")
+            changeState(STATE.MAIN_MENU)
         end
 
-    elseif currentState == STATE.CONTINUE then
-        local cycle = stateFrames % PRESS_INTERVAL
-        if cycle == 0 then
+    elseif currentState == STATE.MAIN_MENU then
+        if isStarterBagOpen() then
+            releaseAll()
+            console:log("[State] Bolsa detectada! Indo para a selecao do inicial...")
+            changeState(STATE.SELECT_STARTER)
+            return
+        elseif isOverworldOpen() then
+            releaseAll()
+            console:log("[State] Overworld detectado! Indo para a interacao com a bolsa...")
+            changeState(STATE.OPEN_BAG)
+            return
+        end
+
+        -- Aguarda 25 frames com as teclas soltas para garantir fade-in do menu e debounce livre
+        if stateFrames < 25 then
+            releaseAll()
+            return
+        end
+
+        -- No Menu Principal, o cursor comeca em "CONTINUE" por padrao quando ha save.
+        -- Dá UM UNICO toque firme em 'A' (frames 25 a 30) e NUNCA fica repetindo!
+        if stateFrames >= 25 and stateFrames <= 30 then
+            if stateFrames == 25 then
+                console:log("[State] Selecionando 'Continue' no Menu Principal (toque unico)...")
+            end
             pressKey(KEY_A)
-        elseif cycle == PRESS_HOLD_FRAMES then
+        else
             releaseAll()
         end
 
-        if stateFrames >= CONTINUE_DURATION then
+        -- Apos confirmar 'Continue', avanca para LOADING apos frame 50
+        if stateFrames >= 50 then
             releaseAll()
-            console:log("[State] Aguardando carregamento do save...")
+            console:log("[State] Aguardando carregamento do save no Overworld...")
             changeState(STATE.LOADING)
         end
 
     elseif currentState == STATE.LOADING then
+        -- DURANTE O CARREGAMENTO DO SAVE, NENHUM BOTAO PODE SER PRESSIONADO!
         releaseAll()
-        if stateFrames >= LOADING_WAIT + loadingExtra then
-            -- Armazena o PV que estiver na memoria (0 no save normal) para detectar quando o novo Pokemon for gerado
+
+        if isStarterBagOpen() then
+            console:log("[State] Bolsa detectada! Indo para a selecao do inicial...")
+            changeState(STATE.SELECT_STARTER)
+            return
+        end
+
+        if isOverworldOpen() then
+            -- Armazena o PV que estiver na memoria (0 no save normal)
             initialPV = readPV()
-            console:log("[State] Jogo carregado no overworld. Interagindo com a bolsa do Prof. Birch...")
+            console:log("[State] Jogo carregado no Overworld (detectado por memoria)! Interagindo com a bolsa...")
+            logToFile("Jogo carregado no overworld. Interagindo com a bolsa...")
+            changeState(STATE.OPEN_BAG)
+            return
+        end
+
+        -- Fallback de tempo: espera ~90 frames (1.5s) + loadingExtra
+        if stateFrames >= 90 + loadingExtra then
+            initialPV = readPV()
+            console:log("[State] Jogo carregado no Overworld (tempo)! Interagindo com a bolsa do Prof. Birch...")
             logToFile("Jogo carregado no overworld. Interagindo com a bolsa...")
             changeState(STATE.OPEN_BAG)
         end
 
     elseif currentState == STATE.OPEN_BAG then
-        -- 1. Se a tela da bolsa já está aberta e a task de input está pronta para ler D-pad:
+        -- 1. Se a task de input da bolsa já está pronta para receber comando:
         if isStarterInputReady() then
             releaseAll()
-            console:log("[State] Bolsa aberta e pronta para selecao! Alvo: " .. starterDisplayName)
-            logToFile("Bolsa aberta e pronta para selecao: " .. starterDisplayName)
-            changeState(STATE.SELECT_STARTER)
+            if stateFrames >= 25 then
+                console:log("[State] Bolsa aberta e pronta para selecao! Alvo: " .. starterDisplayName)
+                logToFile("Bolsa aberta e pronta para selecao: " .. starterDisplayName)
+                changeState(STATE.SELECT_STARTER)
+            end
             return
         end
 
-        -- 2. Se a bolsa já começou a abrir (fade-in), NUNCA aperte A para não selecionar Torchic acidentalmente!
+        -- 2. Se a bolsa já abriu (callback2 da bolsa), NUNCA pressione 'A' para nao escolher Torchic!
         if isStarterBagOpen() then
             releaseAll()
             return
         end
 
-        -- 3. No overworld em frente a bolsa, dá UM toque em 'A' a cada 45 frames (~0.75s) para interagir
-        local cycle = stateFrames % 45
-        if cycle == 0 then
+        -- 3. No overworld em frente a bolsa, aguarda estabilizacao de 20 frames
+        if stateFrames < 20 then
+            releaseAll()
+            return
+        end
+
+        -- Dá UM TOQUE isolado em 'A' (frames 20 a 26) para abrir a bolsa
+        if stateFrames >= 20 and stateFrames <= 26 then
             pressKey(KEY_A)
-        elseif cycle == 5 then
+        else
             releaseAll()
         end
 
-        -- 4. Timeout de segurança: após 240 frames (~4s), se não detectou por memória, avança
+        -- Se a bolsa ainda nao abriu apos 90 frames, da mais um unico toque de seguranca
+        if stateFrames >= 90 and stateFrames <= 96 then
+            pressKey(KEY_A)
+        end
+
+        -- Timeout de seguranca
         if stateFrames >= 240 then
             releaseAll()
-            console:log("[State] Avancando para a selecao do inicial...")
+            console:log("[State] Timeout aguardando bolsa. Avancando para selecao...")
             changeState(STATE.SELECT_STARTER)
         end
 
     elseif currentState == STATE.SELECT_STARTER then
-        -- Garante uma pausa inicial de 10 frames com teclas soltas para resetar debounce de botões
-        if stateFrames < 10 then
+        -- Pausa inicial de 25 frames com tudo solto para garantir que a animacao da bolsa terminou
+        if stateFrames < 25 then
             releaseAll()
+            targetSettledFrames = 0
             return
         end
 
         local curSel = getStarterSelection()
 
-        -- Se o alvo for MUDKIP (seta para a DIREITA ▶, índice 2):
-        if targetIdx == 2 then
-            -- Se o cursor do jogo já alcançou o slot 2 (Mudkip):
-            if curSel == 2 then
-                releaseAll()
-                -- Aguarda estabilização do cursor (~35 frames após selecionar)
-                if stateFrames >= 45 then
-                    console:log("[State] Mudkip selecionado no cursor (slot 2)! Abrindo Pokebola...")
-                    logToFile("Mudkip selecionado no cursor (slot 2)! Abrindo Pokebola...")
-                    changeState(STATE.OPEN_POKEBALL)
-                end
-                return
-            end
-
-            -- Pulsa D-Pad DIREITA a cada 16 frames até o jogo confirmar que mudou para o slot 2
-            local cycle = (stateFrames - 10) % 16
-            if cycle == 0 then
-                console:log("[Input] Pressionando D-Pad DIREITA para selecionar Mudkip...")
-                pressKey(KEY_RIGHT)
-            elseif cycle == 6 then
-                releaseAll()
-            end
-
-        -- Se o alvo for TREECKO (seta para a ESQUERDA ◀, índice 0):
-        elseif targetIdx == 0 then
-            -- Se o cursor do jogo já alcançou o slot 0 (Treecko):
+        -- Se o alvo for TREECKO (seta para a ESQUERDA ◀, indice 0):
+        if targetIdx == 0 then
             if curSel == 0 then
                 releaseAll()
-                if stateFrames >= 45 then
-                    console:log("[State] Treecko selecionado no cursor (slot 0)! Abrindo Pokebola...")
-                    logToFile("Treecko selecionado no cursor (slot 0)! Abrindo Pokebola...")
+                targetSettledFrames = targetSettledFrames + 1
+                -- Exige 25 frames consecutivos com cursor firme no slot 0
+                if targetSettledFrames >= 25 then
+                    console:log("[State] Treecko selecionado e estabilizado no cursor (slot 0)! Abrindo Pokebola...")
+                    logToFile("Treecko selecionado e estabilizado no cursor (slot 0)! Abrindo Pokebola...")
                     changeState(STATE.OPEN_POKEBALL)
                 end
                 return
             end
 
-            -- Pulsa D-Pad ESQUERDA a cada 16 frames até o jogo confirmar que mudou para o slot 0
-            local cycle = (stateFrames - 10) % 16
-            if cycle == 0 then
-                console:log("[Input] Pressionando D-Pad ESQUERDA para selecionar Treecko...")
+            targetSettledFrames = 0
+            -- Envia pulso de D-Pad ESQUERDA a cada 20 frames (segura 6 frames, solta 14)
+            local cycle = (stateFrames - 25) % 20
+            if cycle < 6 then
+                console:log("[Input] Pressionando D-Pad ESQUERDA para Treecko (slot atual=" .. tostring(curSel) .. ")...")
                 pressKey(KEY_LEFT)
-            elseif cycle == 6 then
+            else
                 releaseAll()
             end
 
-        -- Se o alvo for TORCHIC (centro ●, índice 1):
+        -- Se o alvo for MUDKIP (seta para a DIREITA ▶, indice 2):
+        elseif targetIdx == 2 then
+            if curSel == 2 then
+                releaseAll()
+                targetSettledFrames = targetSettledFrames + 1
+                -- Exige 25 frames consecutivos com cursor firme no slot 2
+                if targetSettledFrames >= 25 then
+                    console:log("[State] Mudkip selecionado e estabilizado no cursor (slot 2)! Abrindo Pokebola...")
+                    logToFile("Mudkip selecionado e estabilizado no cursor (slot 2)! Abrindo Pokebola...")
+                    changeState(STATE.OPEN_POKEBALL)
+                end
+                return
+            end
+
+            targetSettledFrames = 0
+            -- Envia pulso de D-Pad DIREITA a cada 20 frames (segura 6 frames, solta 14)
+            local cycle = (stateFrames - 25) % 20
+            if cycle < 6 then
+                console:log("[Input] Pressionando D-Pad DIREITA para Mudkip (slot atual=" .. tostring(curSel) .. ")...")
+                pressKey(KEY_RIGHT)
+            else
+                releaseAll()
+            end
+
+        -- Se o alvo for TORCHIC (centro ●, indice 1):
         else
-            releaseAll()
-            if stateFrames >= 35 then
-                console:log("[State] Torchic mantido no centro (slot 1). Abrindo Pokebola...")
-                logToFile("Torchic mantido no centro (slot 1). Abrindo Pokebola...")
-                changeState(STATE.OPEN_POKEBALL)
+            if curSel == 1 or curSel == -1 then
+                releaseAll()
+                targetSettledFrames = targetSettledFrames + 1
+                if targetSettledFrames >= 25 then
+                    console:log("[State] Torchic mantido e estabilizado no centro (slot 1). Abrindo Pokebola...")
+                    logToFile("Torchic mantido e estabilizado no centro (slot 1). Abrindo Pokebola...")
+                    changeState(STATE.OPEN_POKEBALL)
+                end
+                return
+            elseif curSel == 0 then
+                targetSettledFrames = 0
+                local cycle = (stateFrames - 25) % 20
+                if cycle < 6 then pressKey(KEY_RIGHT) else releaseAll() end
+            elseif curSel == 2 then
+                targetSettledFrames = 0
+                local cycle = (stateFrames - 25) % 20
+                if cycle < 6 then pressKey(KEY_LEFT) else releaseAll() end
             end
         end
 
-        -- Timeout de segurança: após 180 frames avança
-        if stateFrames >= 180 then
+        -- Timeout de seguranca apos 300 frames (~5s)
+        if stateFrames >= 300 then
             releaseAll()
-            changeState(STATE.OPEN_POKEBALL)
+            if curSel == targetIdx then
+                changeState(STATE.OPEN_POKEBALL)
+            else
+                console:log("[AVISO] Cursor nao estabilizou no alvo (" .. tostring(curSel) .. " != " .. tostring(targetIdx) .. "). Reajustando...")
+                changeState(STATE.SELECT_STARTER)
+            end
         end
 
     elseif currentState == STATE.OPEN_POKEBALL then
-        -- No frame 10, pressiona 'A' para abrir o zoom da Pokébola do inicial selecionado
-        if stateFrames == 10 then
-            console:log("[State] Abrindo Pokebola de " .. starterDisplayName .. "...")
+        -- Trava ABSOLUTA de seguranca: se o cursor estiver fora do alvo, NUNCA aperte 'A'!
+        local curSel = getStarterSelection()
+        if curSel ~= -1 and curSel ~= targetIdx then
+            console:log("[ALERTA CRITICO] Cursor fora do alvo (" .. tostring(curSel) .. " != " .. tostring(targetIdx) .. ")! Corrigindo selecao imediatamente...")
+            logToFile("ALERTA: Cursor fora do alvo (" .. tostring(curSel) .. " != " .. tostring(targetIdx) .. "). Corrigindo...")
+            releaseAll()
+            changeState(STATE.SELECT_STARTER)
+            return
+        end
+
+        -- Aguarda pausa de 15 frames para garantir debounce e animacao
+        if stateFrames < 15 then
+            releaseAll()
+            return
+        end
+
+        -- Pressiona 'A' de forma firme por 6 frames (frames 15 a 21) para abrir a Pokebola
+        if stateFrames >= 15 and stateFrames <= 21 then
+            if stateFrames == 15 then
+                console:log("[State] Abrindo Pokebola de " .. starterDisplayName .. "...")
+                logToFile("Abrindo Pokebola de " .. starterDisplayName)
+            end
             pressKey(KEY_A)
-        elseif stateFrames == 16 then
+        else
             releaseAll()
         end
 
-        -- Aguarda o zoom do círculo branco, o cry e a caixa YES/NO surgirem (~80 frames)
-        if stateFrames >= 80 then
+        -- Aguarda o zoom do circulo branco, o cry e a caixa YES/NO surgirem (~85 frames)
+        if stateFrames >= 85 then
             releaseAll()
             console:log("[State] Confirmando 'SIM' para " .. starterDisplayName .. "...")
             logToFile("Confirmando 'SIM' para " .. starterDisplayName)
@@ -616,7 +814,7 @@ local function onFrame()
         end
 
     elseif currentState == STATE.CONFIRM_CHOICE then
-        -- Monitora o PV do slot 1: quando for gerado e diferir do inicial, o Pokémon chegou!
+        -- Monitora o PV do slot 1: quando for gerado e diferir do inicial, o Pokemon chegou!
         local currentPV = readPV()
 
         if currentPV ~= 0 and currentPV ~= initialPV then
@@ -629,7 +827,7 @@ local function onFrame()
             return
         end
 
-        -- Pulsa 'A' a cada 10 frames para confirmar 'YES' e passar o dialogo do Birch
+        -- Pulsa 'A' a cada 10 frames para confirmar 'YES' e passar o dialogo do Prof. Birch
         local cycle = stateFrames % 10
         if cycle == 0 then
             pressKey(KEY_A)
@@ -637,7 +835,7 @@ local function onFrame()
             releaseAll()
         end
 
-        -- Timeout de seguranca
+        -- Timeout de seguranca: 1800 frames (~30s)
         if stateFrames >= MASH_TIMEOUT then
             releaseAll()
             console:log("[AVISO] Timeout na confirmacao! Resetando...")

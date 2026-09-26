@@ -573,44 +573,9 @@ class ShinyHuntGUI:
         # Mantém compatibilidade com referências a self.var_target
         self.var_target = tk.StringVar(value="magikarp")
 
-        # Linha 6: Script Lua (.lua)
-        tk.Label(
-            grid_frame, text="Script Lua (.lua):", font=("Segoe UI", 9), fg=DarkTheme.TEXT_MAIN, bg=DarkTheme.SURFACE_0
-        ).grid(row=5, column=0, sticky="w", pady=4, padx=(0, 8))
-
-        self.entry_lua = tk.Entry(
-            grid_frame,
-            font=("Segoe UI", 9),
-            bg=DarkTheme.SURFACE_1,
-            fg=DarkTheme.TEXT_MAIN,
-            insertbackground=DarkTheme.TEXT_MAIN,
-            relief="flat",
-            bd=0,
-            highlightbackground=DarkTheme.SURFACE_2,
-            highlightthickness=1,
-        )
-        self.entry_lua.grid(row=5, column=1, sticky="ew", pady=4, ipady=4, padx=(0, 8))
-
-        self.btn_browse_lua = tk.Button(
-            grid_frame,
-            text="Procurar...",
-            font=("Segoe UI", 9),
-            bg=DarkTheme.SURFACE_2,
-            fg=DarkTheme.TEXT_MAIN,
-            activebackground=DarkTheme.SURFACE_HOVER,
-            activeforeground=DarkTheme.TEXT_MAIN,
-            relief="flat",
-            bd=0,
-            padx=10,
-            pady=3,
-            cursor="hand2",
-            command=self._browse_lua,
-        )
-        self.btn_browse_lua.grid(row=5, column=2, sticky="e", pady=4)
-
-        # Linha 7: Quantidade de Instâncias e Porta
+        # Linha 6: Quantidade de Instâncias e Porta
         extra_opts_frame = tk.Frame(grid_frame, bg=DarkTheme.SURFACE_0)
-        extra_opts_frame.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        extra_opts_frame.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(6, 0))
 
         # Quantidade de instâncias
         tk.Label(
@@ -930,15 +895,6 @@ class ShinyHuntGUI:
         self.var_target.set(target)
         self._update_target_frames_visibility()
 
-        if game == "emerald":
-            default_lua = EMERALD_LUA_PATH
-        else:
-            default_lua = MAGIKARP_LUA_PATH if self.var_firered_target.get() == "magikarp" else DEFAULT_LUA_PATH
-
-        lua_path = getattr(self.config, "lua_script_path", str(default_lua))
-        self.entry_lua.delete(0, tk.END)
-        self.entry_lua.insert(0, lua_path)
-
         self.spin_instances.delete(0, tk.END)
         self.spin_instances.insert(0, str(self.config.num_instances))
 
@@ -961,12 +917,10 @@ class ShinyHuntGUI:
         emerald_starter = self.var_emerald_starter.get()
         if game == "emerald":
             target = emerald_starter
-            default_lua = EMERALD_LUA_PATH
         else:
             target = self.var_firered_target.get()
-            default_lua = MAGIKARP_LUA_PATH if target == "magikarp" else DEFAULT_LUA_PATH
 
-        lua_path = self.entry_lua.get().strip() or str(default_lua)
+        lua_path = str(self._get_active_lua_path())
 
         return HuntConfig(
             mgba_path=self.entry_mgba.get().strip(),
@@ -980,37 +934,41 @@ class ShinyHuntGUI:
             emerald_starter=emerald_starter,
         )
 
+    def _get_active_lua_path(self) -> Path:
+        """Retorna o caminho do script Lua correspondente à configuração atual."""
+        game = self.var_game.get()
+        if game == "emerald":
+            return EMERALD_LUA_PATH
+        target = self.var_firered_target.get()
+        if target == "magikarp":
+            return MAGIKARP_LUA_PATH
+        return DEFAULT_LUA_PATH
+
     # ── NAVEGAÇÃO DE ARQUIVOS (FILE DIALOGS) E EVENTOS DE ALVO ──
 
     def _on_game_change(self):
         """Callback ao alternar entre Pokémon Fire Red e Pokémon Emerald."""
         game = self.var_game.get()
         self._update_target_frames_visibility()
-        self.entry_lua.delete(0, tk.END)
 
         if game == "emerald":
             starter = self.var_emerald_starter.get()
             self.var_target.set(starter)
-            self.entry_lua.insert(0, str(EMERALD_LUA_PATH))
             self.log(f"Jogo alterado para: Pokémon Emerald | Inicial: {starter.capitalize()} | Script: iniciais_emerald.lua", "INFO")
         else:
             target = self.var_firered_target.get()
             self.var_target.set(target)
             if target == "magikarp":
-                self.entry_lua.insert(0, str(MAGIKARP_LUA_PATH))
                 self.log("Jogo alterado para: Pokémon Fire Red | Alvo: Magikarp | Script: shiny_magi.lua", "INFO")
             else:
-                self.entry_lua.insert(0, str(DEFAULT_LUA_PATH))
                 self.log("Jogo alterado para: Pokémon Fire Red | Alvo: Iniciais de Kanto | Script: shiny_hunt.lua", "INFO")
 
     def _on_emerald_starter_change(self):
         """Callback ao selecionar um dos iniciais de Hoenn (Emerald)."""
         starter = self.var_emerald_starter.get()
         self.var_target.set(starter)
-        self.entry_lua.delete(0, tk.END)
-        self.entry_lua.insert(0, str(EMERALD_LUA_PATH))
 
-        # Atualiza imediatamente TARGET_STARTER no arquivo iniciais_emerald.lua raiz e em dist
+        # Atualiza imediatamente TARGET_STARTER no arquivo iniciais_emerald.lua raiz e em dist (idênticos)
         try:
             starter_val = starter.strip().lower()
             if EMERALD_LUA_PATH.exists():
@@ -1040,12 +998,9 @@ class ShinyHuntGUI:
         """Callback ao alterar o alvo de Fire Red."""
         target = self.var_firered_target.get()
         self.var_target.set(target)
-        self.entry_lua.delete(0, tk.END)
         if target == "magikarp":
-            self.entry_lua.insert(0, str(MAGIKARP_LUA_PATH))
             self.log("Alvo de Fire Red: Magikarp (Rota 4 - Slot Livre) | Script: shiny_magi.lua", "INFO")
         else:
-            self.entry_lua.insert(0, str(DEFAULT_LUA_PATH))
             self.log("Alvo de Fire Red: Iniciais de Kanto (Slot 1) | Script: shiny_hunt.lua", "INFO")
 
     def _on_target_change(self):
@@ -1054,32 +1009,6 @@ class ShinyHuntGUI:
             self._on_emerald_starter_change()
         else:
             self._on_firered_target_change()
-
-    def _browse_lua(self):
-        """Seleciona um arquivo de script Lua personalizado."""
-        current = self.entry_lua.get().strip()
-        initial_dir = str(Path(current).parent) if current and Path(current).parent.exists() else str(DEFAULT_LUA_PATH.parent)
-        path = filedialog.askopenfilename(
-            title="Selecione o script Lua (.lua)",
-            initialdir=initial_dir,
-            filetypes=[("Script Lua (*.lua)", "*.lua"), ("Todos os arquivos", "*.*")],
-        )
-        if path:
-            p = Path(path).resolve()
-            self.entry_lua.delete(0, tk.END)
-            self.entry_lua.insert(0, str(p))
-            name_lower = p.name.lower()
-            if "emerald" in name_lower:
-                self.var_game.set("emerald")
-                self._update_target_frames_visibility()
-            elif "magi" in name_lower:
-                self.var_game.set("firered")
-                self.var_firered_target.set("magikarp")
-                self._update_target_frames_visibility()
-            elif "hunt" in name_lower:
-                self.var_game.set("firered")
-                self.var_firered_target.set("starters")
-                self._update_target_frames_visibility()
 
     def _browse_mgba(self):
         """Seleciona o executável do mGBA."""
@@ -1140,8 +1069,7 @@ class ShinyHuntGUI:
 
     def _copy_lua_path(self):
         """Copia o caminho do script Lua para a área de transferência e pré-registra no mGBA (qt.ini)."""
-        lua_path = self.entry_lua.get().strip() or str(self.config.lua_script_path)
-        lua_target = Path(lua_path).resolve()
+        lua_target = self._get_active_lua_path().resolve()
         lua_name = lua_target.name
 
         # Registra no histórico do mGBA e copia para a área de transferência
@@ -1164,8 +1092,8 @@ class ShinyHuntGUI:
 
     def _show_instructions(self):
         """Exibe popup com passo a passo ilustrado."""
-        lua_path = self.entry_lua.get().strip() or str(self.config.lua_script_path)
-        lua_name = Path(lua_path).name
+        lua_path = self._get_active_lua_path()
+        lua_name = lua_path.name
         game = self.var_game.get()
 
         if game == "emerald":
@@ -1276,8 +1204,6 @@ class ShinyHuntGUI:
         self.entry_rom.config(state="disabled")
         self.entry_sav.config(state="disabled")
         self.entry_port.config(state="disabled")
-        self.entry_lua.config(state="disabled")
-        self.btn_browse_lua.config(state="disabled")
         self.radio_magi.config(state="disabled")
         self.radio_char.config(state="disabled")
 
@@ -1649,8 +1575,6 @@ class ShinyHuntGUI:
         self.entry_rom.config(state="normal")
         self.entry_sav.config(state="normal")
         self.entry_port.config(state="normal")
-        self.entry_lua.config(state="normal")
-        self.btn_browse_lua.config(state="normal")
         self.radio_magi.config(state="normal")
         self.radio_char.config(state="normal")
 
