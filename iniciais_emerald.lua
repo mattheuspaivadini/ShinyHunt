@@ -267,19 +267,78 @@ local function readOTID()
     return 0
 end
 
---- Pressiona uma tecla do GBA (compatibilidade ampla addKey + setKeys bitmask)
+-- Endereços de hardware e memória de controle - Emerald (US) v1.0 (BPEE)
+local ADDR_MAIN_CALLBACK2 = 0x030022C4  -- Ponteiro do loop principal do jogo (CB2)
+local ADDR_TASK0_FUNC     = 0x03005E00  -- Ponteiro de função da Task 0 (Task_StarterChoose / Task_HandleStarterChooseInput)
+local ADDR_TASK0_STARTER  = 0x03005E08  -- tStarterSelection da Task 0 (0=Treecko, 1=Torchic, 2=Mudkip)
+
+--- Rastreamento de bitmask das teclas ativas
+local currentKeys = 0
+
+--- Pressiona uma tecla do GBA (combina addKey e setKeys)
 local function pressKey(key)
+    currentKeys = currentKeys | (1 << key)
     pcall(function() emu:addKey(key) end)
-    pcall(function() emu:setKeys(1 << key) end)
+    pcall(function() emu:setKeys(currentKeys) end)
+end
+
+--- Solta uma tecla do GBA
+local function releaseKey(key)
+    currentKeys = currentKeys & ~(1 << key)
+    pcall(function() emu:clearKey(key) end)
+    pcall(function() emu:setKeys(currentKeys) end)
 end
 
 --- Solta todas as teclas do GBA
 local function releaseAll()
+    currentKeys = 0
     pcall(function() emu:setKeys(0) end)
     for k = 0, 9 do
         pcall(function() emu:clearKey(k) end)
     end
     pcall(function() emu:clearKeys(0x3FF) end)
+end
+
+--- Grava log persistente em arquivo
+local function logToFile(msg)
+    pcall(function()
+        local f = io.open("shiny_emerald.log", "a")
+        if f then
+            f:write(string.format("[%s] %s\n", os.date("%H:%M:%S"), msg))
+            f:close()
+        end
+    end)
+end
+
+--- Verifica se a tela de seleção dos iniciais de Emerald está ativa
+local function isStarterBagOpen()
+    local ok1, cb2 = pcall(function() return emu:read32(ADDR_MAIN_CALLBACK2) end)
+    if ok1 and cb2 then
+        local rawCb2 = cb2 & ~1
+        if rawCb2 == 0x081341E0 then
+            return true
+        end
+    end
+    local ok2, f = pcall(function() return emu:read32(ADDR_TASK0_FUNC) end)
+    if ok2 and f then
+        local rawF = f & ~1
+        if rawF >= 0x08133E00 and rawF <= 0x08134800 then
+            return true
+        end
+    end
+    return false
+end
+
+--- Lê a seleção atual na tela de iniciais (0=Treecko, 1=Torchic, 2=Mudkip)
+local function getStarterSelection()
+    local ok, sel = pcall(function() return emu:read16(ADDR_TASK0_STARTER) end)
+    if ok and sel then return sel end
+    return -1
+end
+
+--- Sincroniza diretamente o índice da seleção no jogo (0=Treecko, 1=Torchic, 2=Mudkip)
+local function setStarterSelection(targetIdx)
+    pcall(function() emu:write16(ADDR_TASK0_STARTER, targetIdx) end)
 end
 
 -- Tabela de decodificação de espécie do Pokémon (GBA Gen 3)
@@ -500,78 +559,94 @@ local function onFrame()
         end
 
     elseif currentState == STATE.OPEN_BAG then
-        -- ── Interage com a bolsa no chão (apenas UMA pressão do botão A!) ──
-        -- Pressiona A do frame 5 ao 18 para garantir início da interação
-        if stateFrames == 5 then
+        -- 1. Verifica se a bolsa do Prof. Birch já está aberta na memória
+        if isStarterBagOpen() then
+            releaseAll()
+            console:log("[State] Bolsa aberta confirmada na memoria!")
+            console:log("[State] Navegando ate: " .. starterDisplayName)
+            logToFile("Bolsa aberta confirmada na memoria. Alvo: " .. starterDisplayName)
+            changeState(STATE.SELECT_STARTER)
+            return
+        end
+
+        -- 2. Se a bolsa ainda não abriu, pulsa A a cada 14 frames para interagir no overworld
+        local cycle = stateFrames % 14
+        if cycle == 0 then
             pressKey(KEY_A)
-        elseif stateFrames == 18 then
+        elseif cycle == 5 then
             releaseAll()
         end
 
-        -- CRÍTICO: NUNCA pressionar o botão A em nenhum outro frame neste estado!
-        -- A animação de abertura da bolsa leva ~50 frames. Se pressionarmos A após ela
-        -- abrir, o jogo selecionará instantaneamente o Torchic (que é a posição padrão do meio)!
-        -- Aguardamos 120 frames (~2.0s) para que a bolsa esteja 100% aberta, visível e parada.
-        if stateFrames >= OPEN_BAG_WAIT then
+        -- 3. Timeout de segurança: se após 360 frames (~6s) não detectar via memória, avança
+        if stateFrames >= 360 then
             releaseAll()
-            console:log("[State] Bolsa aberta! Navegando ate: " .. starterDisplayName .. "...")
+            console:log("[AVISO] Timeout na deteccao de abertura da bolsa. Avancando para selecao...")
+            logToFile("AVISO: Timeout na deteccao da bolsa. Avancando...")
             changeState(STATE.SELECT_STARTER)
         end
 
     elseif currentState == STATE.SELECT_STARTER then
-        -- ── Move o cursor na bolsa conforme o inicial desejado ──
-        -- O cursor padrão do jogo começa no meio: Torchic (index 1)
+        -- Define o índice do inicial desejado (0=Treecko, 1=Torchic, 2=Mudkip)
+        local targetIdx = 1
         if normalizedStarter == "treecko" then
-            -- Mover para a esquerda (Treecko = index 0)
-            -- Envia 3 pulsos firmes de KEY_LEFT para garantir a movimentação
-            if stateFrames == 5 or stateFrames == 25 or stateFrames == 45 then
-                pressKey(KEY_LEFT)
-            elseif stateFrames == 15 or stateFrames == 35 or stateFrames == 55 then
-                releaseAll()
-            end
-
-            if stateFrames >= 70 then
-                releaseAll()
-                console:log("[State] Cursor posicionado em Treecko! Abrindo Pokebola...")
-                changeState(STATE.CONFIRM_CHOICE)
-            end
-
+            targetIdx = 0
         elseif normalizedStarter == "mudkip" then
-            -- Mover para a direita (Mudkip = index 2)
-            -- Envia 3 pulsos firmes de KEY_RIGHT para garantir a movimentação
-            if stateFrames == 5 or stateFrames == 25 or stateFrames == 45 then
+            targetIdx = 2
+        end
+
+        -- Sincroniza a memória da Task com o alvo a cada frame
+        setStarterSelection(targetIdx)
+
+        -- Pulsa D-pad para movimentar visualmente o cursor/mão
+        if normalizedStarter == "treecko" then
+            if stateFrames == 5 or stateFrames == 20 then
+                pressKey(KEY_LEFT)
+            elseif stateFrames == 14 or stateFrames == 28 then
+                releaseAll()
+            end
+        elseif normalizedStarter == "mudkip" then
+            if stateFrames == 5 or stateFrames == 20 then
                 pressKey(KEY_RIGHT)
-            elseif stateFrames == 15 or stateFrames == 35 or stateFrames == 55 then
+            elseif stateFrames == 14 or stateFrames == 28 then
                 releaseAll()
             end
-
-            if stateFrames >= 70 then
-                releaseAll()
-                console:log("[State] Cursor posicionado em Mudkip! Abrindo Pokebola...")
-                changeState(STATE.CONFIRM_CHOICE)
-            end
-
         else
-            -- Torchic já é a posição central padrão do jogo
             releaseAll()
-            if stateFrames >= 30 then
-                console:log("[State] Cursor mantido em Torchic! Abrindo Pokebola...")
-                changeState(STATE.CONFIRM_CHOICE)
-            end
+        end
+
+        -- Aguarda 40 frames (~0.7s) para a animação do cursor se estabilizar
+        if stateFrames >= 40 then
+            setStarterSelection(targetIdx)
+            releaseAll()
+            local cur = getStarterSelection()
+            console:log(string.format("[State] Cursor finalizado em: %s (slot=%d)", starterDisplayName, cur))
+            logToFile(string.format("Cursor finalizado em: %s (slot=%d)", starterDisplayName, cur))
+            changeState(STATE.CONFIRM_CHOICE)
         end
 
     elseif currentState == STATE.CONFIRM_CHOICE then
-        -- ── Pressiona A na Pokebola escolhida para abrir o zoom e a pergunta ──
-        if stateFrames == 5 or stateFrames == 25 then
+        local targetIdx = 1
+        if normalizedStarter == "treecko" then
+            targetIdx = 0
+        elseif normalizedStarter == "mudkip" then
+            targetIdx = 2
+        end
+
+        -- Dupla segurança: antes de apertar A, reafirma o índice no jogo
+        setStarterSelection(targetIdx)
+
+        -- Pressiona A do frame 5 ao 15 para abrir o zoom da Pokebola
+        if stateFrames == 5 then
             pressKey(KEY_A)
-        elseif stateFrames == 15 or stateFrames == 35 then
+        elseif stateFrames == 15 then
             releaseAll()
         end
 
-        -- Aguarda o zoom do circulo branco, cry do Pokemon e o dialogo 'YES / NO'
+        -- Aguarda a animação de zoom, o cry do Pokémon e o diálogo YES/NO surgirem (~75 frames)
         if stateFrames >= 75 then
             releaseAll()
             console:log("[State] Confirmando 'SIM' para " .. starterDisplayName .. "...")
+            logToFile("Confirmando 'SIM' para " .. starterDisplayName)
             changeState(STATE.MASHING)
         end
 
@@ -586,6 +661,7 @@ local function onFrame()
             console:log("")
             console:log("[!!!] Pokemon recebido na party (Slot 1)!")
             console:log("[!!!] PV = " .. hex(currentPV))
+            logToFile("Pokemon recebido na party! PV = " .. hex(currentPV))
             changeState(STATE.CHECK_SHINY)
             return
         end
@@ -603,12 +679,12 @@ local function onFrame()
         if stateFrames >= MASH_TIMEOUT then
             releaseAll()
             console:log("[AVISO] Timeout no mashing da bolsa! Resetando...")
+            logToFile("AVISO: Timeout no mashing da bolsa. Resetando...")
             changeState(STATE.RESETTING)
         end
 
     elseif currentState == STATE.CHECK_SHINY then
         -- ── Le PV e OTID e calcula o XOR para verificar se e shiny ──
-        -- Pequena pausa de seguranca para garantir estabilidade da memoria
         if stateFrames < 5 then
             releaseAll()
             return
@@ -644,11 +720,23 @@ local function onFrame()
         console:log("  TID:             " .. tid)
         console:log("  SID:             " .. sid)
         console:log("  XOR:             " .. xorVal .. " (shiny se < 8)")
+        logToFile(string.format("Check: alvo=%s, obtido=%s, PV=%s, OTID=%s, XOR=%d", starterDisplayName, actualName, hex(pv), hex(otid), xorVal))
 
-        if (normalizedStarter == "treecko" and speciesId ~= 277 and speciesId ~= 0) or
-           (normalizedStarter == "torchic" and speciesId ~= 280 and speciesId ~= 0) or
-           (normalizedStarter == "mudkip" and speciesId ~= 283 and speciesId ~= 0) then
-            console:log("  [ALERTA] ATENCAO: Especie obtida (" .. actualName .. ") difere do alvo configurado!")
+        -- Validação estrita de espécie: se a espécie obtida não for a esperada, descarta
+        local isCorrectSpecies = true
+        if normalizedStarter == "treecko" and speciesId ~= 277 and speciesId ~= 0 then
+            isCorrectSpecies = false
+        elseif normalizedStarter == "torchic" and speciesId ~= 280 and speciesId ~= 0 then
+            isCorrectSpecies = false
+        elseif normalizedStarter == "mudkip" and speciesId ~= 283 and speciesId ~= 0 then
+            isCorrectSpecies = false
+        end
+
+        if not isCorrectSpecies then
+            console:log("  [ALERTA] Especie obtida (" .. actualName .. ") difere do alvo configurado! Descartando e resetando...")
+            logToFile("ALERTA: Especie obtida difere do alvo configurado. Resetando...")
+            changeState(STATE.RESETTING)
+            return
         end
 
         local shiny = isShiny(pv, otid)
@@ -661,6 +749,7 @@ local function onFrame()
 
         if shiny then
             console:log("")
+            logToFile("SHINY ENCONTRADO! PV=" .. hex(pv) .. " OTID=" .. hex(otid))
             changeState(STATE.SHINY_FOUND)
         else
             console:log("  Resultado: NAO shiny")
@@ -767,8 +856,13 @@ if connected then
     end
 end
 
--- Registra o callback de frame do mGBA
+-- Registra callbacks do mGBA
 callbacks:add("frame", onFrame)
+callbacks:add("keysRead", function()
+    if currentKeys ~= 0 then
+        pcall(function() emu:setKeys(currentKeys) end)
+    end
+end)
 
 console:log("")
 console:log("  Script carregado! O shiny hunting vai comecar em breve...")

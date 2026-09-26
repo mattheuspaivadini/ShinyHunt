@@ -553,20 +553,25 @@ class InstanceManager:
                 f"local SCRIPT_INSTANCE_ID = {instance_id}\n"
                 f"local TARGET_STARTER = \"{starter_val}\"\n\n"
             )
-            lua_src = Path(self.config.lua_script_path)
-            if lua_src.exists():
-                content = lua_src.read_text(encoding="utf-8")
-                (inst_dir / lua_src.name).write_text(header + content, encoding="utf-8")
-                # Se o script selecionado não for shiny_hunt.lua, mantém também como shiny_hunt.lua
-                if lua_src.name != "shiny_hunt.lua":
-                    (inst_dir / "shiny_hunt.lua").write_text(header + content, encoding="utf-8")
+            # Salva cópias dedicadas com o cabeçalho configurado
+            if EMERALD_LUA_PATH.exists():
+                (inst_dir / "iniciais_emerald.lua").write_text(header + EMERALD_LUA_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+            if MAGIKARP_LUA_PATH.exists():
+                (inst_dir / "shiny_magi.lua").write_text(header + MAGIKARP_LUA_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+            if DEFAULT_LUA_PATH.exists():
+                (inst_dir / "shiny_hunt_firered.lua").write_text(header + DEFAULT_LUA_PATH.read_text(encoding="utf-8"), encoding="utf-8")
 
-            # Garante que shiny_hunt.lua, shiny_magi.lua e iniciais_emerald.lua estejam sempre atualizados na instância
-            for default_file in (DEFAULT_LUA_PATH, MAGIKARP_LUA_PATH, EMERALD_LUA_PATH):
-                if default_file.exists():
-                    dst = inst_dir / default_file.name
-                    text = default_file.read_text(encoding="utf-8")
-                    dst.write_text(header + text, encoding="utf-8")
+            # CRÍTICO: shiny_hunt.lua na instância deve SEMPRE ser o script do jogo atual!
+            # Se for Emerald, shiny_hunt.lua recebe o script de iniciais de Emerald
+            if self.config.game == "emerald":
+                if EMERALD_LUA_PATH.exists():
+                    (inst_dir / "shiny_hunt.lua").write_text(header + EMERALD_LUA_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+            elif self.config.target_pokemon == "magikarp":
+                if MAGIKARP_LUA_PATH.exists():
+                    (inst_dir / "shiny_hunt.lua").write_text(header + MAGIKARP_LUA_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+            else:
+                if DEFAULT_LUA_PATH.exists():
+                    (inst_dir / "shiny_hunt.lua").write_text(header + DEFAULT_LUA_PATH.read_text(encoding="utf-8"), encoding="utf-8")
         except Exception:
             pass
 

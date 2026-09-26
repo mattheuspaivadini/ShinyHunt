@@ -332,17 +332,24 @@ class InstanceManager:
                 f"local SCRIPT_INSTANCE_ID = {instance_id}\n"
                 f"local TARGET_STARTER = \"{starter_val}\"\n\n"
             )
-            if LUA_SCRIPT.exists():
-                content = LUA_SCRIPT.read_text(encoding="utf-8")
-                (inst_dir / LUA_SCRIPT.name).write_text(header + content, encoding="utf-8")
-                if LUA_SCRIPT.name != "shiny_hunt.lua":
-                    (inst_dir / "shiny_hunt.lua").write_text(header + content, encoding="utf-8")
+            # Salva cópias dedicadas com o cabeçalho configurado
+            if EMERALD_LUA_SCRIPT.exists():
+                (inst_dir / "iniciais_emerald.lua").write_text(header + EMERALD_LUA_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+            if MAGIKARP_LUA_SCRIPT.exists():
+                (inst_dir / "shiny_magi.lua").write_text(header + MAGIKARP_LUA_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+            if DEFAULT_LUA_SCRIPT.exists():
+                (inst_dir / "shiny_hunt_firered.lua").write_text(header + DEFAULT_LUA_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
 
-            for default_file in (DEFAULT_LUA_SCRIPT, MAGIKARP_LUA_SCRIPT, EMERALD_LUA_SCRIPT):
-                if default_file.exists():
-                    dst = inst_dir / default_file.name
-                    text = default_file.read_text(encoding="utf-8")
-                    dst.write_text(header + text, encoding="utf-8")
+            # CRÍTICO: shiny_hunt.lua na instância deve SEMPRE ser o script do jogo atual!
+            if SELECTED_GAME == "emerald":
+                if EMERALD_LUA_SCRIPT.exists():
+                    (inst_dir / "shiny_hunt.lua").write_text(header + EMERALD_LUA_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+            elif TARGET_POKEMON == "magikarp":
+                if MAGIKARP_LUA_SCRIPT.exists():
+                    (inst_dir / "shiny_hunt.lua").write_text(header + MAGIKARP_LUA_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+            else:
+                if DEFAULT_LUA_SCRIPT.exists():
+                    (inst_dir / "shiny_hunt.lua").write_text(header + DEFAULT_LUA_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
         except Exception:
             pass
 
