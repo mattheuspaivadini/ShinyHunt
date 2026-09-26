@@ -6,14 +6,16 @@
 
 ## Português
 
-Automação para caça de Pokémon Shiny em Pokémon Fire Red (US) v1.0 utilizando instâncias simultâneas do mGBA coordenadas via socket TCP.
+Automação para caça de Pokémon Shiny em Pokémon Fire Red (US) v1.0 e Pokémon Emerald (US) v1.0 utilizando instâncias simultâneas do mGBA coordenadas via socket TCP.
 
 ### Recursos Recentes
 
-- **Anti-determinismo de RNG:** Variação de frames e sementes independentes por instância para evitar repetição de PIDs entre resets e janelas.
-- **Ciclos mais rápidos:** Tempo médio reduzido para ~20 segundos por tentativa (~1.750 tentativas/hora com 10 instâncias a 60 FPS).
-- **Detecção de Save State:** Identificação da instância vencedora por data de modificação do arquivo `.ss1`, evitando fechamento indevido da janela do shiny.
-- **Compatível com qualquer inicial:** Funciona com Charmander, Squirtle ou Bulbasaur (basta posicionar o save em frente à Pokébola do inicial desejado).
+- **Suporte a Pokémon Emerald:** Caçada automatizada dos iniciais de Hoenn (**Treecko**, **Torchic** e **Mudkip**) com o script `iniciais_emerald.lua`.
+- **Navegação Inteligente na Bolsa do Prof. Birch:** O script interage com a bolsa na Rota 101, move as setas até o inicial escolhido na interface (Treecko = ◀ Esquerda, Torchic = ● Centro, Mudkip = ▶ Direita), confirma com A e lê a memória do Slot 1 (`0x020244EC`).
+- **Alternador de Jogos no App:** Seleção rápida entre Pokémon Fire Red e Pokémon Emerald diretamente pela interface gráfica ou linha de comando.
+- **Anti-determinismo de RNG:** Variação dinâmica de frames e sementes estocásticas por instância — vital especialmente para Emerald, cujo PRNG inicia em zero no boot.
+- **Ciclos mais rápidos:** Ciclos otimizados (~16 a 20s por tentativa).
+- **Detecção de Save State:** Identificação da instância vencedora por data de modificação do arquivo `.ss1`, mantendo apenas a janela vitoriosa aberta.
 
 ### Pré-requisitos
 
@@ -21,8 +23,8 @@ Automação para caça de Pokémon Shiny em Pokémon Fire Red (US) v1.0 utilizan
 |---|---|
 | Sistema | Windows 10/11 (64-bit) |
 | Emulador | mGBA v0.10+ instalado |
-| ROM | Pokémon Fire Red (US) v1.0 |
-| Save | Arquivo `.sav` salvo em frente à Pokébola do Pokémon inicial desejado |
+| ROMs Compatíveis | Pokémon Fire Red (US) v1.0 / Pokémon Emerald (US) v1.0 |
+| Save | Arquivo `.sav` salvo em frente à Pokébola desejada (Fire Red) ou em frente à Bolsa do Prof. Birch (Emerald) |
 | Python | 3.10+ |
 
 ### Como Usar
@@ -75,15 +77,22 @@ ShinyHunt/
 ├── shiny_core.py
 ├── shiny_hunter.py
 ├── shiny_hunter_gui.py
-├── shiny_hunt.lua
+├── shiny_hunt.lua           # Iniciais de Kanto (Fire Red)
+├── shiny_magi.lua           # Magikarp Rota 4 (Fire Red)
+├── iniciais_emerald.lua     # Iniciais de Hoenn (Emerald)
 ├── config.json
 └── README.md
 ```
 
-### Especificações Técnicas (Fire Red US v1.0)
+### Especificações Técnicas de Memória
 
-- **Personality Value (PV/PID):** `0x02024284` (u32)
+#### Pokémon Fire Red (US) v1.0 (BPRE)
+- **Party Slot 1 (PV/PID):** `0x02024284` (u32)
 - **Trainer ID / Secret ID (OTID):** `0x02024288` (u32)
+
+#### Pokémon Emerald (US) v1.0 (BPEE)
+- **Party Slot 1 (PV/PID):** `0x020244EC` (u32)
+- **Trainer ID / Secret ID (OTID):** `0x020244F0` (u32)
 
 Fórmula Shiny (Gen 3):
 ```text
@@ -98,7 +107,7 @@ Shiny se: (P1 XOR P2 XOR TID XOR SID) < 8
 ### Solução de Problemas
 
 - **Script Lua em modo standalone:** Inicie o servidor Python antes de carregar o script no mGBA.
-- **Aviso de PV inicial não-zero:** O save utilizado já contém um Pokémon na equipe. Use um save anterior à escolha do inicial.
+- **Aviso de PV inicial não-zero:** O save utilizado já contém um Pokémon na equipe. Use um save anterior à escolha do inicial (party vazia).
 - **Porta em uso:** Certifique-se de que nenhum processo anterior do programa permaneceu aberto na porta 27015.
 
 ---

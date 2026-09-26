@@ -31,7 +31,10 @@ SERVER_PORT = 27015
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_LUA_SCRIPT = SCRIPT_DIR / "shiny_hunt.lua"
 MAGIKARP_LUA_SCRIPT = SCRIPT_DIR / "shiny_magi.lua"
+EMERALD_LUA_SCRIPT = SCRIPT_DIR / "iniciais_emerald.lua"
 LUA_SCRIPT = MAGIKARP_LUA_SCRIPT if MAGIKARP_LUA_SCRIPT.exists() else DEFAULT_LUA_SCRIPT
+TARGET_STARTER = "treecko"
+SELECTED_GAME = "firered"
 INSTANCES_DIR = Path(ROM_DIR) / "instances"
 
 
@@ -321,16 +324,21 @@ class InstanceManager:
             pass
 
     def _create_instance_lua_script(self, inst_dir, instance_id):
-        """Copia os scripts Lua para a pasta da instância com o ID pré-definido."""
+        """Copia os scripts Lua para a pasta da instância com o ID e alvo pré-definidos."""
         try:
-            header = f"-- [Configuracao de Instancia Automatica]\nlocal SCRIPT_INSTANCE_ID = {instance_id}\n\n"
+            starter_val = TARGET_STARTER if SELECTED_GAME == "emerald" else ""
+            header = (
+                f"-- [Configuracao de Instancia Automatica]\n"
+                f"local SCRIPT_INSTANCE_ID = {instance_id}\n"
+                f"local TARGET_STARTER = \"{starter_val}\"\n\n"
+            )
             if LUA_SCRIPT.exists():
                 content = LUA_SCRIPT.read_text(encoding="utf-8")
                 (inst_dir / LUA_SCRIPT.name).write_text(header + content, encoding="utf-8")
                 if LUA_SCRIPT.name != "shiny_hunt.lua":
                     (inst_dir / "shiny_hunt.lua").write_text(header + content, encoding="utf-8")
 
-            for default_file in (DEFAULT_LUA_SCRIPT, MAGIKARP_LUA_SCRIPT):
+            for default_file in (DEFAULT_LUA_SCRIPT, MAGIKARP_LUA_SCRIPT, EMERALD_LUA_SCRIPT):
                 if default_file.exists():
                     dst = inst_dir / default_file.name
                     if not dst.exists() or default_file == LUA_SCRIPT:
@@ -462,10 +470,13 @@ class InstanceManager:
 
 def print_banner():
     """Exibe o banner do programa."""
+    game_title = "Pokemon Emerald (US)" if SELECTED_GAME == "emerald" else "Pokemon Fire Red (US)"
+    target_info = f"Inicial: {TARGET_STARTER.capitalize()}" if SELECTED_GAME == "emerald" else "Kanto / Rota 4"
     print()
     print(f"  {C.YELLOW}{C.BOLD}╔══════════════════════════════════════════════════════╗{C.RESET}")
     print(f"  {C.YELLOW}{C.BOLD}║  {C.star()}  Hunter Shiny v1.0  {C.star()}                           ║{C.RESET}")
-    print(f"  {C.YELLOW}{C.BOLD}║  Pokemon Fire Red (US) v1.0 — 10 Instâncias         ║{C.RESET}")
+    print(f"  {C.YELLOW}{C.BOLD}║  {game_title:<25} — {NUM_INSTANCES} Instâncias       ║{C.RESET}")
+    print(f"  {C.YELLOW}{C.BOLD}║  {target_info:<50}║{C.RESET}")
     print(f"  {C.YELLOW}{C.BOLD}╚══════════════════════════════════════════════════════╝{C.RESET}")
     print()
 
@@ -622,20 +633,74 @@ def print_shiny_celebration(info, start_time):
 
 def run_cli():
     """Função principal do programa em modo terminal/CLI."""
-    global LUA_SCRIPT
+    global LUA_SCRIPT, SELECTED_GAME, TARGET_STARTER
 
     # Habilita cores ANSI no terminal do Windows
     os.system("")
 
-    # Opções de linha de comando para o alvo
-    if "--iniciais" in sys.argv or "--starters" in sys.argv or "--charmander" in sys.argv:
-        LUA_SCRIPT = DEFAULT_LUA_SCRIPT
+    # Opções de linha de comando para jogo e alvo
+    if "--emerald" in sys.argv or "--esmeralda" in sys.argv:
+        SELECTED_GAME = "emerald"
+        LUA_SCRIPT = EMERALD_LUA_SCRIPT
+    elif "--firered" in sys.argv or "--fire-red" in sys.argv:
+        SELECTED_GAME = "firered"
+
+    if "--treecko" in sys.argv:
+        SELECTED_GAME = "emerald"
+        TARGET_STARTER = "treecko"
+        LUA_SCRIPT = EMERALD_LUA_SCRIPT
+    elif "--torchic" in sys.argv:
+        SELECTED_GAME = "emerald"
+        TARGET_STARTER = "torchic"
+        LUA_SCRIPT = EMERALD_LUA_SCRIPT
+    elif "--mudkip" in sys.argv:
+        SELECTED_GAME = "emerald"
+        TARGET_STARTER = "mudkip"
+        LUA_SCRIPT = EMERALD_LUA_SCRIPT
+    elif "--iniciais" in sys.argv or "--starters" in sys.argv or "--charmander" in sys.argv:
+        if SELECTED_GAME != "emerald":
+            LUA_SCRIPT = DEFAULT_LUA_SCRIPT
     elif "--magikarp" in sys.argv:
+        SELECTED_GAME = "firered"
         LUA_SCRIPT = MAGIKARP_LUA_SCRIPT
+
     for i, arg in enumerate(sys.argv):
-        if arg == "--target" and i + 1 < len(sys.argv):
+        if arg in ("--game", "-g") and i + 1 < len(sys.argv):
+            g = sys.argv[i + 1].lower()
+            if "eme" in g:
+                SELECTED_GAME = "emerald"
+                LUA_SCRIPT = EMERALD_LUA_SCRIPT
+            else:
+                SELECTED_GAME = "firered"
+        elif arg in ("--starter", "-s") and i + 1 < len(sys.argv):
+            s = sys.argv[i + 1].lower()
+            SELECTED_GAME = "emerald"
+            LUA_SCRIPT = EMERALD_LUA_SCRIPT
+            if "mud" in s or "agua" in s:
+                TARGET_STARTER = "mudkip"
+            elif "tor" in s or "fogo" in s:
+                TARGET_STARTER = "torchic"
+            else:
+                TARGET_STARTER = "treecko"
+        elif arg == "--target" and i + 1 < len(sys.argv):
             target = sys.argv[i + 1].lower()
-            LUA_SCRIPT = MAGIKARP_LUA_SCRIPT if "magi" in target else DEFAULT_LUA_SCRIPT
+            if "tree" in target:
+                SELECTED_GAME = "emerald"
+                TARGET_STARTER = "treecko"
+                LUA_SCRIPT = EMERALD_LUA_SCRIPT
+            elif "tor" in target:
+                SELECTED_GAME = "emerald"
+                TARGET_STARTER = "torchic"
+                LUA_SCRIPT = EMERALD_LUA_SCRIPT
+            elif "mud" in target:
+                SELECTED_GAME = "emerald"
+                TARGET_STARTER = "mudkip"
+                LUA_SCRIPT = EMERALD_LUA_SCRIPT
+            elif "magi" in target:
+                SELECTED_GAME = "firered"
+                LUA_SCRIPT = MAGIKARP_LUA_SCRIPT
+            else:
+                LUA_SCRIPT = DEFAULT_LUA_SCRIPT
         elif arg == "--lua" and i + 1 < len(sys.argv):
             LUA_SCRIPT = Path(sys.argv[i + 1]).resolve()
 

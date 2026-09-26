@@ -29,9 +29,14 @@ else:
 
 DEFAULT_LUA_PATH = SCRIPT_DIR / "shiny_hunt.lua"
 MAGIKARP_LUA_PATH = SCRIPT_DIR / "shiny_magi.lua"
+EMERALD_LUA_PATH = SCRIPT_DIR / "iniciais_emerald.lua"
 
 # Se algum dos scripts Lua não for encontrado na pasta do .exe, tenta extrair dos arquivos empacotados
-for bundled_name, bundled_var in [("shiny_hunt.lua", DEFAULT_LUA_PATH), ("shiny_magi.lua", MAGIKARP_LUA_PATH)]:
+for bundled_name, bundled_var in [
+    ("shiny_hunt.lua", DEFAULT_LUA_PATH),
+    ("shiny_magi.lua", MAGIKARP_LUA_PATH),
+    ("iniciais_emerald.lua", EMERALD_LUA_PATH),
+]:
     if not bundled_var.exists() and hasattr(sys, "_MEIPASS"):
         bundled = Path(sys._MEIPASS) / bundled_name
         if bundled.exists():
@@ -52,7 +57,9 @@ class HuntConfig:
     num_instances: int = 10
     server_port: int = 27015
     lua_script_path: str = str(MAGIKARP_LUA_PATH if MAGIKARP_LUA_PATH.exists() else DEFAULT_LUA_PATH)
-    target_pokemon: str = "magikarp"  # "magikarp" ou "charmander"
+    target_pokemon: str = "magikarp"  # "magikarp", "charmander", "starters", "treecko", "torchic", "mudkip"
+    game: str = "firered"  # "firered" ou "emerald"
+    emerald_starter: str = "treecko"  # "treecko", "torchic", "mudkip"
 
     @property
     def instances_dir(self) -> Path:
@@ -96,14 +103,23 @@ class HuntConfig:
             try:
                 with open(target, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                    game = data.get("game", "firered")
+                    emerald_starter = data.get("emerald_starter", "treecko")
+                    default_lua = (
+                        str(EMERALD_LUA_PATH if EMERALD_LUA_PATH.exists() else DEFAULT_LUA_PATH)
+                        if game == "emerald"
+                        else str(MAGIKARP_LUA_PATH if MAGIKARP_LUA_PATH.exists() else DEFAULT_LUA_PATH)
+                    )
                     return cls(
                         mgba_path=data.get("mgba_path", r"C:\Program Files\mGBA\mGBA.exe"),
                         rom_path=data.get("rom_path", r"C:\roms\FireRed.gba"),
                         sav_path=data.get("sav_path", r"C:\roms\FireRed.sav"),
                         num_instances=int(data.get("num_instances", 10)),
                         server_port=int(data.get("server_port", 27015)),
-                        lua_script_path=data.get("lua_script_path", str(MAGIKARP_LUA_PATH if MAGIKARP_LUA_PATH.exists() else DEFAULT_LUA_PATH)),
+                        lua_script_path=data.get("lua_script_path", default_lua),
                         target_pokemon=data.get("target_pokemon", "magikarp"),
+                        game=game,
+                        emerald_starter=emerald_starter,
                     )
             except Exception:
                 pass
@@ -447,9 +463,14 @@ class InstanceManager:
             pass
 
     def _create_instance_lua_script(self, inst_dir: Path, instance_id: int):
-        """Copia os scripts Lua para a pasta da instância com o ID pré-definido."""
+        """Copia os scripts Lua para a pasta da instância com o ID e alvo pré-definidos."""
         try:
-            header = f"-- [Configuracao de Instancia Automatica]\nlocal SCRIPT_INSTANCE_ID = {instance_id}\n\n"
+            starter_val = self.config.emerald_starter if self.config.game == "emerald" else ""
+            header = (
+                f"-- [Configuracao de Instancia Automatica]\n"
+                f"local SCRIPT_INSTANCE_ID = {instance_id}\n"
+                f"local TARGET_STARTER = \"{starter_val}\"\n\n"
+            )
             lua_src = Path(self.config.lua_script_path)
             if lua_src.exists():
                 content = lua_src.read_text(encoding="utf-8")
@@ -458,8 +479,8 @@ class InstanceManager:
                 if lua_src.name != "shiny_hunt.lua":
                     (inst_dir / "shiny_hunt.lua").write_text(header + content, encoding="utf-8")
 
-            # Garante que tanto shiny_hunt.lua quanto shiny_magi.lua estejam disponíveis na instância
-            for default_file in (DEFAULT_LUA_PATH, MAGIKARP_LUA_PATH):
+            # Garante que shiny_hunt.lua, shiny_magi.lua e iniciais_emerald.lua estejam disponíveis na instância
+            for default_file in (DEFAULT_LUA_PATH, MAGIKARP_LUA_PATH, EMERALD_LUA_PATH):
                 if default_file.exists():
                     dst = inst_dir / default_file.name
                     if not dst.exists() or default_file == lua_src:
