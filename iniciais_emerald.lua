@@ -77,7 +77,7 @@ local KEY_L      = 9
 local WAIT_AFTER_RESET    = 240   -- ~4.0s: espera BIOS + intro Game Freak
 local MASH_TIMEOUT        = 1800  -- ~30s: timeout de seguranca
 
--- ESCANEAR TAMANHO da varredura (ver secao 1 de melhorias-shiny-hunter-emerald.md)
+-- TAMANHO da varredura (ver secao 1 de melhorias-shiny-hunter-emerald.md)
 -- O PV do inicial depende da QUANTIDADE TOTAL de frames decorridos desde o reset,
 -- e nao de titleExtra/loadingExtra independentes: o LCG avanca 1x por frame, logo
 --|titleExtra + loadingExtra| que importa. Somas diferentes => resultados diferentes;
@@ -101,6 +101,7 @@ local STATE = {
     CHECK_SHINY     = "CHECK_SHINY",
     SHINY_FOUND     = "SHINY_FOUND",
     RESETTING       = "RESETTING",
+    SCAN_EXHAUSTED  = "SCAN_EXHAUSTED",
     DONE            = "DONE"
 }
 
@@ -171,6 +172,58 @@ local lastStateName       = ""        -- Para log de mudanca de estado
 local titleExtra          = 0         -- atraso na title screen, calculado no INIT
 local loadingExtra        = 0         -- atraso apos carregar o save, calculado no INIT
 local targetSettledFrames = 0         -- Frames consecutivos com cursor perfeitamente estabilizado no alvo
+
+-- "Roleta" sem reposicao: baralho embaralhado com as somas de atraso desta instancia.
+local scanList       = nil  -- Array com TODAS as somas reservadas a esta instancia, ja embaralhado
+local scanPos        = 0     -- Quantas somas do baralho ja foram sorteadas
+local scanListReady  = false -- true quando scanList foi construido para o instanceId atual
+local scanListForId  = ""   -- instanceId usado para construir o scanList atual
+
+-- ==================== ROTEIA SEM REPOSIÇÃO ====================
+
+--- Embaralha uma lista no lugar (Fisher-Yates) usando math.random
+local function shuffleInPlace(list)
+    for i = #list, 2, -1 do
+        local j = math.random(i)
+        list[i], list[j] = list[j], list[i]
+    end
+end
+
+--- Monta e embaralha o baralho de somas de atraso reservado a uma instancia.
+--- Cada instancia fica com as somas em que (soma % NUM_INSTANCES_TOTAL) == offset,
+--- portanto o espaco 0..MAX_TOTAL_EXTRA fica dividido sem sobreposicao entre elas.
+--- Reconstruir apenas quando o instanceId mudar evita reembaralhar no meio do ciclo.
+local function buildScanList(instNum)
+    instNum = tonumber(instNum) or 1
+    if instNum < 1 or instNum > 30 then instNum = 1 end
+
+    local key = tostring(instNum)
+    if scanListReady and scanListForId == key then
+        return
+    end
+
+    local offset = instNum - 1  -- 0-based
+    local list = {}
+    -- Percorre o intervalo 0..MAX_TOTAL_EXTRA e guarda so as somas desta instancia.
+    for s = offset, MAX_TOTAL_EXTRA, NUM_INSTANCES_TOTAL do
+        list[#list + 1] = s
+    end
+
+    -- Sem entropia: chama random() algumas vezes para descartar o estado inicial,
+    -- igual ja e feito logo apos o math.randomseed no carregamento do script.
+    pcall(function()
+        math.random(); math.random(); math.random()
+    end)
+    shuffleInPlace(list)
+
+    scanList      = list
+    scanPos       = 0
+    scanListReady = true
+    scanListForId = key
+
+    console:log("[Info] Roleta pronta: " .. #list .. " somas de atraso embaralhadas "
+        .. "(0.." .. MAX_TOTAL_EXTRA .. ", fatia da instancia #" .. instNum .. ").")
+end
 
 -- ==================== FUNÇÕES UTILITÁRIAS ====================
 
@@ -473,6 +526,8 @@ local function checkServerMessages()
                 math.randomseed(os.time() + math.floor(os.clock() * 1000000) + numId * 7919)
                 math.random(); math.random(); math.random()
             end)
+            -- Monta a roleta desta instancia assim que o ID real e conhecido
+            buildScanList(instanceId)
         end
     end
 end
@@ -498,6 +553,7 @@ local function onFrame()
                 math.randomseed(os.time() + math.floor(os.clock() * 1000000) + detected * 7919)
                 math.random(); math.random(); math.random()
             end)
+            buildScanList(detected)
             if connected then
                 sendMessage("IDENTIFY|" .. detected)
             end
@@ -520,17 +576,48 @@ local function onFrame()
         -- Re-detecta o alvo dinamicamente para garantir sincronia com a interface
         normalizedStarter, starterDisplayName, targetIdx, targetSpeciesId = getNormalizedStarter(TARGET_STARTER)
 
-        -- Varredura sistematica, sem repeticao, sobre a SOMA dos atrasos.
+        -- ROTEIA SEM REPOSIÇÃO sobre a SOMA dos atrasos.
         -- O RNG avanca 1x por frame, entao o que define o PV e o TOTAL de frames
-        -- extras (titleExtra + loadingExtra). Indexar o par (title, loading) como se
-        -- fossem dimensoes independentes faria combinacoes distintas com a mesma soma
-        -- e, portanto, o mesmo PV -> a varredura saturaria cedo.
-        -- Aqui o indice 0..MAX_TOTAL_EXTRA e decomposto de forma que a soma seja
-        -- exatamente igual ao indice (titleExtra fica limitado, o resto vai para loading).
-        -- Ate MAX_TOTAL_EXTRA cada tentativa usa uma soma inedita, sem colisao.
-        local instOffset = (tonumber(instanceId) or 1) - 1  -- 0-based: cobre index=0 e evita buraco na varredura
-        local index = (attempts - 1) * NUM_INSTANCES_TOTAL + instOffset
-        local totalExtra = index % (MAX_TOTAL_EXTRA + 1)
+        -- extras (titleExtra + loadingExtra); o par nao importa, so a soma.
+        -- A ordem de visita e ALEATORIA (baralho embaralhado com Fisher-Yates):
+        -- consome-se o proximo item a cada tentativa, entao um atraso que ja saiu
+        -- (ex.: 65 e depois 780) NUNCA volta a sair antes de o baralho inteiro
+        -- ter sido testado - o que ficou provado sem shiny nao e testado de novo.
+        local totalExtra
+        if not scanListReady then
+            -- Fallback defensivo: instancia ainda nao identificada (raro, SHINY_INSTANCE_ID
+            -- normalmente ja vem do ambiente). Usa a varredura sequencial para
+            -- nao desperdiçar a tentativa enquanto a roleta nao existe.
+            local instOffset = (tonumber(instanceId) or 1) - 1
+            local index = (attempts - 1) * NUM_INSTANCES_TOTAL + instOffset
+            totalExtra = index % (MAX_TOTAL_EXTRA + 1)
+        else
+            -- scanList e 1-based: quando scanPos ja chegou ao ultimo elemento, acabou.
+            -- Precisa ser >= (e nao >), senao leria scanList[N+1] = nil e estouraria
+            -- "attempt to perform arithmetic on a nil value" na ultima tentativa.
+            if scanPos >= #scanList then
+                -- Baralho esgotado: nao resta nenhuma soma nova para esta instancia.
+                console:log("")
+                console:log("=========================================================")
+                console:log("  ESPACO DE VARREDURA ESGOTADO")
+                console:log("  Esta instancia testou todas as " .. #scanList .. " somas de")
+                console:log("  atraso do seu espaco reservado (0.." .. MAX_TOTAL_EXTRA .. ")")
+                console:log("  e nenhuma delas produziu shiny.")
+                console:log("  Como o sorteio nunca repete antes de esgotar, reiniciar")
+                console:log("  o mGBA so testaria exatamente os mesmos valores de novo.")
+                console:log("=========================================================")
+                console:log("")
+                logToFile(string.format("ESPACO ESGOTADO: instancia #%s testou %d somas distintas (0..%d) sem shiny.",
+                    tostring(instanceId), #scanList, MAX_TOTAL_EXTRA))
+                sendMessage("EXHAUSTED|" .. tostring(instanceId) .. "|" .. #scanList)
+                changeState(STATE.SCAN_EXHAUSTED)
+                return
+            end
+            scanPos = scanPos + 1
+            totalExtra = scanList[scanPos]
+        end
+
+        -- Decompomos a soma mantendo titleExtra limitado e o resto no loading
         titleExtra     = totalExtra % (TITLE_EXTRA_MAX + 1)
         loadingExtra   = totalExtra - titleExtra
         initialPV = 0
@@ -540,6 +627,9 @@ local function onFrame()
         console:log("  Tentativa #" .. attempts .. "  (Instancia #" .. instanceId .. ")")
         console:log("  Alvo: " .. starterDisplayName)
         console:log("  Delays: title +" .. titleExtra .. " | loading +" .. loadingExtra .. " (total +" .. totalExtra .. " frames)")
+        if scanListReady then
+            console:log("  Sorteio: " .. scanPos .. "/" .. #scanList .. " somas desta instancia")
+        end
         console:log("========================================")
 
         sendMessage("ATTEMPT|" .. attempts)
@@ -985,6 +1075,12 @@ local function onFrame()
             changeState(STATE.INIT)
         end
 
+    elseif currentState == STATE.SCAN_EXHAUSTED then
+        -- Nada a fazer: o baralho de somas desta instancia acabou sem shiny.
+        -- Fica aqui so soltando os botoes ate o usuario decidir (o aviso completo
+        -- ja foi impresso e gravado no log quando o esgotamento foi detectado).
+        releaseAll()
+
     elseif currentState == STATE.DONE then
         releaseAll()
     end
@@ -1012,6 +1108,7 @@ if detected then
         math.randomseed(os.time() + math.floor(os.clock() * 1000000) + detected * 7919)
         math.random(); math.random(); math.random()
     end)
+    buildScanList(detected)
 else
     pcall(function()
         math.randomseed(os.time() + math.floor(os.clock() * 1000000))
