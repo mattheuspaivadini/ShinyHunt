@@ -86,6 +86,22 @@ local MASH_TIMEOUT        = 1800  -- ~30s: timeout de seguranca
 local TITLE_EXTRA_MAX     = 999    -- teto do atraso na title screen (~16s), evita espera longa demais nela
 local MAX_TOTAL_EXTRA     = 99999  -- teto do total de frames extras por tentativa (100.000 valores, ~27,7 min no pior caso)
 
+-- VIES DA ROLETA: com ordem puramente aleatoria em 0..MAX_TOTAL_EXTRA, o atraso
+-- medio ja e MAX/2 (~50.000 frames) desde a PRIMEIRA tentativa, e cada tentativa
+-- leva horas. Como a hipotese (o PV depende so da SOMA) nao distingue somas
+-- pequenas de grandes, nao ha motivo para comecar pelas caras: a ordem e um
+-- sorteio sem reposicao PONDERADO, com peso(v) = (1 + v/SCAN_DELAY_SCALE)^(-SCAN_DELAY_BIAS).
+-- Assim as somas baratas saem primeiro (tentativa rapida), as caras ficam para a
+-- cauda final, e todas sao testadas exatamente uma vez.
+--   BIAS = 0  -> aleatorio puro (o caso lento de antes)
+--   BIAS = 0,5 (padrao) -> 1as 1000 tentativas ~2.713 frames em media (~2,3 min a 20x),
+--                          Spearman 0,68: ainda embaralhado, nao sequencial
+--   BIAS = 1,2 -> ainda mais rapido (~1,4 min a 20x nas 1as 1000), mais inclinado
+-- Para mais cobertura sem ficar lento, aumente MAX_TOTAL_EXTRA; para acelerar,
+-- aumente SCAN_DELAY_BIAS. Os dois sao numeros inteiros/fixos de tuneis.
+local SCAN_DELAY_BIAS     = 0.5    -- forca do vies para somas pequenas (0 = aleatorio puro)
+local SCAN_DELAY_SCALE    = 10000  -- em quantos frames o peso cai pela metade
+
 -- ==================== ESTADOS ====================
 
 local STATE = {
@@ -181,15 +197,7 @@ local scanListForId  = ""   -- instanceId usado para construir o scanList atual
 
 -- ==================== ROTEIA SEM REPOSIÇÃO ====================
 
---- Embaralha uma lista no lugar (Fisher-Yates) usando math.random
-local function shuffleInPlace(list)
-    for i = #list, 2, -1 do
-        local j = math.random(i)
-        list[i], list[j] = list[j], list[i]
-    end
-end
-
---- Monta e embaralha o baralho de somas de atraso reservado a uma instancia.
+--- Monta o baralho de somas de atraso reservado a uma instancia, em ordem de sorteio.
 --- Cada instancia fica com as somas em que (soma % NUM_INSTANCES_TOTAL) == offset,
 --- portanto o espaco 0..MAX_TOTAL_EXTRA fica dividido sem sobreposicao entre elas.
 --- Reconstruir apenas quando o instanceId mudar evita reembaralhar no meio do ciclo.
@@ -203,10 +211,12 @@ local function buildScanList(instNum)
     end
 
     local offset = instNum - 1  -- 0-based
-    local list = {}
+    local vals, keys = {}, {}
     -- Percorre o intervalo 0..MAX_TOTAL_EXTRA e guarda so as somas desta instancia.
     for s = offset, MAX_TOTAL_EXTRA, NUM_INSTANCES_TOTAL do
-        list[#list + 1] = s
+        local n = #vals + 1
+        vals[n] = s
+        keys[n] = math.random() * ((1 + s / SCAN_DELAY_SCALE) ^ (-SCAN_DELAY_BIAS))
     end
 
     -- Sem entropia: chama random() algumas vezes para descartar o estado inicial,
@@ -214,15 +224,26 @@ local function buildScanList(instNum)
     pcall(function()
         math.random(); math.random(); math.random()
     end)
-    shuffleInPlace(list)
+
+    -- Sorteio sem reposicao PONDERADO (Efraimidis-Spirakis): ordena os indices pela
+    -- chave random()*peso(v) em ordem DECRESCENTE. Como cada valor recebe uma chave
+    -- unica, o resultado e uma permutacao => nenhuma soma se repete e todas saem
+    -- testadas. Com SCAN_DELAY_BIAS = 0 o peso e constante e cai no aleatorio puro.
+    local order = {}
+    for i = 1, #vals do order[i] = i end
+    table.sort(order, function(a, b) return keys[a] > keys[b] end)
+
+    local list = {}
+    for i = 1, #order do list[i] = vals[order[i]] end
 
     scanList      = list
     scanPos       = 0
     scanListReady = true
     scanListForId = key
 
-    console:log("[Info] Roleta pronta: " .. #list .. " somas de atraso embaralhadas "
-        .. "(0.." .. MAX_TOTAL_EXTRA .. ", fatia da instancia #" .. instNum .. ").")
+    console:log("[Info] Roleta pronta: " .. #list .. " somas de atraso em ordem ponderada "
+        .. "(0.." .. MAX_TOTAL_EXTRA .. ", fatia da instancia #" .. instNum
+        .. ", vies=" .. SCAN_DELAY_BIAS .. ").")
 end
 
 -- ==================== FUNÇÕES UTILITÁRIAS ====================
@@ -579,10 +600,12 @@ local function onFrame()
         -- ROTEIA SEM REPOSIÇÃO sobre a SOMA dos atrasos.
         -- O RNG avanca 1x por frame, entao o que define o PV e o TOTAL de frames
         -- extras (titleExtra + loadingExtra); o par nao importa, so a soma.
-        -- A ordem de visita e ALEATORIA (baralho embaralhado com Fisher-Yates):
+        -- A ordem de visita e um sorteio sem reposicao PONDERADO (ver SCAN_DELAY_BIAS):
         -- consome-se o proximo item a cada tentativa, entao um atraso que ja saiu
         -- (ex.: 65 e depois 780) NUNCA volta a sair antes de o baralho inteiro
         -- ter sido testado - o que ficou provado sem shiny nao e testado de novo.
+        -- O vies apenas faz as somas baratas sairem primeiro, para nao passar
+        -- horas em uma unica tentativa logo no comeco do ciclo.
         local totalExtra
         if not scanListReady then
             -- Fallback defensivo: instancia ainda nao identificada (raro, SHINY_INSTANCE_ID
