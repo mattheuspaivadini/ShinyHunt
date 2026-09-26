@@ -30,19 +30,21 @@ local SCRIPT_INSTANCE_ID = SCRIPT_INSTANCE_ID or nil
 --   "treecko"  = Planta (Move o cursor para a Esquerda ◀)
 --   "torchic"  = Fogo   (Mantem o cursor no Centro ●)
 --   "mudkip"   = Agua   (Move o cursor para a Direita ▶)
-local TARGET_STARTER = TARGET_STARTER or "treecko"
+local TARGET_STARTER = TARGET_STARTER or "mudkip"
 
 -- Servidor Python (para coordenacao entre instancias)
 local SERVER_HOST = "127.0.0.1"
 local SERVER_PORT = 27015
 
--- Enderecos de memoria - Pokemon Emerald (US) v1.0 (BPEE Rev 0)
--- A party do jogador em Emerald US comeca em 0x020244EC (gPlayerParty)
--- Cada Pokemon ocupa 100 bytes (0x64)
--- Offset 0x00 = Personality Value (PV/PID) [u32, nao criptografado]
--- Offset 0x04 = OT ID (TID nos 16 bits baixos, SID nos 16 bits altos) [u32, nao criptografado]
-local ADDR_PARTY_PV   = 0x020244EC  -- Personality Value do 1o Pokemon
-local ADDR_PARTY_OTID = 0x020244F0  -- OT ID do 1o Pokemon
+-- Enderecos de memoria - Pokemon Emerald (US) v1.0 (BPEE Rev 0) - SOMENTE LEITURA (READ-ONLY)
+-- AVISO: NENHUMA escrita de memoria e feita para nao corromper o checksum do Pokemon (evita Bad Egg)
+local ADDR_PARTY_PV               = 0x020244EC  -- Personality Value do 1o Pokemon (gPlayerParty[0].personality)
+local ADDR_PARTY_OTID             = 0x020244F0  -- OT ID do 1o Pokemon
+local ADDR_MAIN_CALLBACK2         = 0x030022C4  -- Ponteiro do loop principal do jogo (gMain.callback2)
+local ADDR_TASK0_FUNC             = 0x03005E00  -- Ponteiro da funcao ativa da Task 0 (gTasks[0].func)
+local ADDR_TASK0_STARTER          = 0x03005E08  -- Indice da selecao na bolsa (gTasks[0].data[0]: 0=Treecko, 1=Torchic, 2=Mudkip)
+local FN_CB2_STARTER_CHOOSE       = 0x081341E0  -- Callback da tela da bolsa (CB2_StarterChoose)
+local FN_TASK_STARTER_INPUT       = 0x0813425C  -- Funcao que processa as teclas na bolsa (Task_HandleStarterChooseInput)
 
 -- Constantes de teclas do GBA (C.GBA_KEY)
 local KEY_A      = 0
@@ -61,14 +63,11 @@ local WAIT_AFTER_RESET    = 360   -- ~6.0s: espera BIOS + intro Game Freak (estr
 local TITLE_MASH_DURATION = 240   -- ~4.0s: mash A/Start na title screen (Rayquaza)
 local CONTINUE_DURATION   = 180   -- ~3.0s: selecionar Continue e carregar o save
 local LOADING_WAIT        = 180   -- ~3.0s: espera o jogo carregar no overworld
-local OPEN_BAG_WAIT       = 120   -- ~2.0s: espera animacao de fade e abertura completa da bolsa
 local MASH_TIMEOUT        = 3600  -- ~60s: timeout de seguranca
 local PRESS_INTERVAL      = 12    -- Pressionar botao a cada 12 frames (~5x/s)
 local PRESS_HOLD_FRAMES   = 4     -- Manter botao pressionado por 4 frames
 
 -- Atraso extra maximo (em frames) sorteado a cada tentativa (garante variacao de RNG)
--- Nota para Emerald: o PRNG sempre comeca em seed 0 no boot, entao a variacao
--- de frames (titleExtra e loadingExtra) e VITAL para alcancar diferentes seeds/PIDs!
 local TITLE_EXTRA_MAX     = 180   -- ate 3s a mais na title screen
 local LOADING_EXTRA_MAX   = 180   -- ate 3s a mais apos carregar save
 
@@ -82,8 +81,8 @@ local STATE = {
     LOADING         = "LOADING",
     OPEN_BAG        = "OPEN_BAG",
     SELECT_STARTER  = "SELECT_STARTER",
+    OPEN_POKEBALL   = "OPEN_POKEBALL",
     CONFIRM_CHOICE  = "CONFIRM_CHOICE",
-    MASHING         = "MASHING",
     CHECK_SHINY     = "CHECK_SHINY",
     SHINY_FOUND     = "SHINY_FOUND",
     RESETTING       = "RESETTING",
@@ -95,12 +94,10 @@ local STATE = {
 local function getNormalizedStarter(starterStr)
     local s = starterStr
 
-    -- 1. Se starterStr não veio definido ou está vazio, usa TARGET_STARTER global
     if not s or s == "" then
         s = TARGET_STARTER
     end
 
-    -- 2. Tenta ler variável de ambiente repassada pelo processo Python
     if os and type(os.getenv) == "function" then
         local ok, envVal = pcall(function() return os.getenv("SHINY_EMERALD_STARTER") end)
         if ok and envVal and envVal ~= "" then
@@ -108,7 +105,6 @@ local function getNormalizedStarter(starterStr)
         end
     end
 
-    -- 3. Tenta ler de emerald_starter.txt em múltiplos caminhos
     if io and type(io.open) == "function" then
         local candidates = {
             "emerald_starter.txt",
@@ -123,8 +119,8 @@ local function getNormalizedStarter(starterStr)
                 local content = f:read("*all")
                 f:close()
                 if content and content ~= "" then
-                    local trimmed = content:gsub("%s+", "")
-                    if trimmed ~= "" then
+                    local trimmed = content:gsub("%s+", ""):lower()
+                    if trimmed == "treecko" or trimmed == "torchic" or trimmed == "mudkip" then
                         s = trimmed
                         break
                     end
@@ -133,55 +129,32 @@ local function getNormalizedStarter(starterStr)
         end
     end
 
-    -- 4. Tenta ler de config.json
-    if io and type(io.open) == "function" then
-        local configCandidates = {
-            "config.json",
-            "../config.json",
-            "../../config.json"
-        }
-        for _, path in ipairs(configCandidates) do
-            local ok, f = pcall(function() return io.open(path, "r") end)
-            if ok and f then
-                local content = f:read("*all")
-                f:close()
-                if content and content ~= "" then
-                    local val = content:match('"emerald_starter"%s*:%s*"([^"]+)"')
-                    if val and val ~= "" then
-                        s = val
-                        break
-                    end
-                end
-            end
-        end
-    end
-
-    local clean = string.lower(tostring(s or "treecko")):gsub("%s+", "")
+    local clean = string.lower(tostring(s or "mudkip")):gsub("%s+", "")
     if clean:find("tree") or clean:find("planta") or clean:find("grass") then
-        return "treecko", "Treecko (Planta - Seta Esquerda ◀)"
+        return "treecko", "Treecko (Planta - Seta Esquerda ◀)", 0, 277
     elseif clean:find("mud") or clean:find("agua") or clean:find("water") then
-        return "mudkip", "Mudkip (Agua - Seta Direita ▶)"
+        return "mudkip", "Mudkip (Agua - Seta Direita ▶)", 2, 283
     else
-        return "torchic", "Torchic (Fogo - Centro ●)"
+        return "torchic", "Torchic (Fogo - Centro ●)", 1, 280
     end
 end
 
-local normalizedStarter, starterDisplayName = getNormalizedStarter(TARGET_STARTER)
+local normalizedStarter, starterDisplayName, targetIdx, targetSpeciesId = getNormalizedStarter(TARGET_STARTER)
 
 -- ==================== VARIÁVEIS GLOBAIS ====================
 
-local currentState   = STATE.INIT
-local stateFrames    = 0         -- Frames no estado atual
-local totalFrames    = 0         -- Frames totais desde o inicio
-local attempts       = 0         -- Numero de tentativas
-local prevPV         = 0         -- PV anterior (para detectar 0 -> valor)
-local sock           = nil       -- Socket TCP para o servidor Python
-local connected      = false     -- Se esta conectado ao servidor
-local instanceId     = "?"       -- ID da instancia (atribuido pelo servidor)
-local shouldStop     = false     -- Se deve parar (shiny encontrado em outra instancia)
-local lastStateName  = ""        -- Para log de mudanca de estado
-local titleExtra     = 0         -- sorteado no INIT
-local loadingExtra   = 0         -- sorteado no INIT
+local currentState        = STATE.INIT
+local stateFrames         = 0         -- Frames no estado atual
+local totalFrames         = 0         -- Frames totais desde o inicio
+local attempts            = 0         -- Numero de tentativas
+local initialPV           = 0         -- PV detectado ao carregar o save
+local sock                = nil       -- Socket TCP para o servidor Python
+local connected           = false     -- Se esta conectado ao servidor
+local instanceId          = "?"       -- ID da instancia (atribuido pelo servidor)
+local shouldStop          = false     -- Se deve parar (shiny encontrado em outra instancia)
+local lastStateName       = ""        -- Para log de mudanca de estado
+local titleExtra          = 0         -- sorteado no INIT
+local loadingExtra        = 0         -- sorteado no INIT
 
 -- ==================== FUNÇÕES UTILITÁRIAS ====================
 
@@ -192,12 +165,10 @@ end
 
 --- Detecta o numero real desta instancia atraves de multiplos metodos
 local function detectInstanceId()
-    -- 1. Definido diretamente no script desta instancia
     if SCRIPT_INSTANCE_ID and type(SCRIPT_INSTANCE_ID) == "number" and SCRIPT_INSTANCE_ID >= 1 and SCRIPT_INSTANCE_ID <= 30 then
         return SCRIPT_INSTANCE_ID
     end
 
-    -- 2. ROM header (offset 0x080000B5 marcado pelo inicializador)
     if emu and type(emu.read8) == "function" then
         local ok, val = pcall(function() return emu:read8(0x080000B5) end)
         if ok and val and val >= 1 and val <= 30 then
@@ -205,7 +176,6 @@ local function detectInstanceId()
         end
     end
 
-    -- 3. Variavel de ambiente repassada no processo
     if os and type(os.getenv) == "function" then
         local ok, envVal = pcall(function() return os.getenv("SHINY_INSTANCE_ID") end)
         if ok and envVal then
@@ -216,7 +186,6 @@ local function detectInstanceId()
         end
     end
 
-    -- 4. Arquivo instance_id.txt no diretorio da ROM/instancia
     if io and type(io.open) == "function" then
         local ok, f = pcall(function() return io.open("instance_id.txt", "r") end)
         if ok and f then
@@ -241,62 +210,27 @@ local function changeState(newState)
     end
 end
 
---- Verifica se um Pokemon e shiny baseado no PV e OTID
---- Formula Gen 3: (PV_high XOR PV_low XOR TID XOR SID) < 8
-local function isShiny(pv, otid)
-    if pv == 0 then return false end
-    local tid = otid & 0xFFFF
-    local sid = (otid >> 16) & 0xFFFF
-    local p1 = (pv >> 16) & 0xFFFF
-    local p2 = pv & 0xFFFF
-    local xorVal = p1 ~ p2 ~ tid ~ sid
-    return xorVal < 8
-end
-
---- Le o Personality Value do primeiro Pokemon da party
-local function readPV()
-    local ok, val = pcall(function() return emu:read32(ADDR_PARTY_PV) end)
-    if ok and val then return val end
-    return 0
-end
-
---- Le o OT ID do primeiro Pokemon da party
-local function readOTID()
-    local ok, val = pcall(function() return emu:read32(ADDR_PARTY_OTID) end)
-    if ok and val then return val end
-    return 0
-end
-
--- Endereços de hardware e memória de controle - Emerald (US) v1.0 (BPEE)
-local ADDR_MAIN_CALLBACK2 = 0x030022C4  -- Ponteiro do loop principal do jogo (CB2)
-local ADDR_TASK0_FUNC     = 0x03005E00  -- Ponteiro de função da Task 0 (Task_StarterChoose / Task_HandleStarterChooseInput)
-local ADDR_TASK0_STARTER  = 0x03005E08  -- tStarterSelection da Task 0 (0=Treecko, 1=Torchic, 2=Mudkip)
-
---- Rastreamento de bitmask das teclas ativas
-local currentKeys = 0
-
---- Pressiona uma tecla do GBA (combina addKey e setKeys)
+--- Pressiona uma tecla do GBA via controle nativo do emulador
 local function pressKey(key)
-    currentKeys = currentKeys | (1 << key)
-    pcall(function() emu:addKey(key) end)
-    pcall(function() emu:setKeys(currentKeys) end)
+    pcall(function()
+        emu:addKey(key)
+        emu:setKeys(1 << key)
+    end)
 end
 
---- Solta uma tecla do GBA
-local function releaseKey(key)
-    currentKeys = currentKeys & ~(1 << key)
-    pcall(function() emu:clearKey(key) end)
-    pcall(function() emu:setKeys(currentKeys) end)
+--- Pressiona multiplas teclas do GBA via bitmask
+local function pressKeys(mask)
+    pcall(function()
+        emu:setKeys(mask)
+    end)
 end
 
 --- Solta todas as teclas do GBA
 local function releaseAll()
-    currentKeys = 0
-    pcall(function() emu:setKeys(0) end)
-    for k = 0, 9 do
-        pcall(function() emu:clearKey(k) end)
-    end
-    pcall(function() emu:clearKeys(0x3FF) end)
+    pcall(function()
+        emu:setKeys(0)
+        emu:clearKeys(0x3FF)
+    end)
 end
 
 --- Grava log persistente em arquivo
@@ -310,35 +244,59 @@ local function logToFile(msg)
     end)
 end
 
---- Verifica se a tela de seleção dos iniciais de Emerald está ativa
+--- Le o Personality Value do primeiro Pokemon da party (SOMENTE LEITURA)
+local function readPV()
+    local ok, val = pcall(function() return emu:read32(ADDR_PARTY_PV) end)
+    if ok and val then return val end
+    return 0
+end
+
+--- Le o OT ID do primeiro Pokemon da party (SOMENTE LEITURA)
+local function readOTID()
+    local ok, val = pcall(function() return emu:read32(ADDR_PARTY_OTID) end)
+    if ok and val then return val end
+    return 0
+end
+
+--- Verifica se um Pokemon e shiny baseado no PV e OTID
+--- Formula Gen 3: (PV_high XOR PV_low XOR TID XOR SID) < 8
+local function isShiny(pv, otid)
+    if pv == 0 then return false end
+    local tid = otid & 0xFFFF
+    local sid = (otid >> 16) & 0xFFFF
+    local p1 = (pv >> 16) & 0xFFFF
+    local p2 = pv & 0xFFFF
+    local xorVal = p1 ~ p2 ~ tid ~ sid
+    return xorVal < 8
+end
+
+--- Verifica se a tela da bolsa do Prof. Birch abriu na memoria (SOMENTE LEITURA)
 local function isStarterBagOpen()
-    local ok1, cb2 = pcall(function() return emu:read32(ADDR_MAIN_CALLBACK2) end)
-    if ok1 and cb2 then
-        local rawCb2 = cb2 & ~1
-        if rawCb2 == 0x081341E0 then
-            return true
-        end
-    end
-    local ok2, f = pcall(function() return emu:read32(ADDR_TASK0_FUNC) end)
-    if ok2 and f then
-        local rawF = f & ~1
-        if rawF >= 0x08133E00 and rawF <= 0x08134800 then
-            return true
-        end
+    local ok, cb2 = pcall(function() return emu:read32(ADDR_MAIN_CALLBACK2) end)
+    if ok and cb2 and (cb2 & ~1) == FN_CB2_STARTER_CHOOSE then
+        return true
     end
     return false
 end
 
---- Lê a seleção atual na tela de iniciais (0=Treecko, 1=Torchic, 2=Mudkip)
-local function getStarterSelection()
-    local ok, sel = pcall(function() return emu:read16(ADDR_TASK0_STARTER) end)
-    if ok and sel then return sel end
-    return -1
+--- Verifica se a task de escolha de inicial está ativa aguardando input (SOMENTE LEITURA)
+local function isStarterInputReady()
+    if not isStarterBagOpen() then return false end
+    local ok, func = pcall(function() return emu:read32(ADDR_TASK0_FUNC) end)
+    if ok and func and (func & ~1) == FN_TASK_STARTER_INPUT then
+        return true
+    end
+    return false
 end
 
---- Sincroniza diretamente o índice da seleção no jogo (0=Treecko, 1=Torchic, 2=Mudkip)
-local function setStarterSelection(targetIdx)
-    pcall(function() emu:write16(ADDR_TASK0_STARTER, targetIdx) end)
+--- Le o indice atual da selecao na tela de iniciais (SOMENTE LEITURA)
+--- 0 = Treecko, 1 = Torchic, 2 = Mudkip
+local function getStarterSelection()
+    local ok, sel = pcall(function() return emu:read16(ADDR_TASK0_STARTER) end)
+    if ok and sel and sel >= 0 and sel <= 2 then
+        return sel
+    end
+    return -1
 end
 
 -- Tabela de decodificação de espécie do Pokémon (GBA Gen 3)
@@ -373,7 +331,6 @@ end
 --- Tenta conectar ao servidor Python
 local function connectToServer()
     if not socket then
-        console:log("[Socket] Modulo 'socket' nao disponivel - modo standalone")
         connected = false
         return
     end
@@ -389,8 +346,6 @@ local function connectToServer()
     else
         sock = nil
         connected = false
-        console:log("[Socket] Nao foi possivel conectar (modo standalone ativo)")
-        console:log("[Socket] O script continuara funcionando normalmente!")
     end
 end
 
@@ -402,7 +357,6 @@ local function sendMessage(msg)
     end)
     if not ok then
         connected = false
-        console:log("[Socket] Conexao perdida: " .. tostring(err))
     end
 end
 
@@ -418,7 +372,6 @@ local function checkServerMessages()
 
     local data = result
 
-    -- Processa comandos do servidor
     if string.find(data, "STOP") then
         shouldStop = true
         console:log("")
@@ -447,12 +400,12 @@ local function onFrame()
     totalFrames = totalFrames + 1
     stateFrames = stateFrames + 1
 
-    -- Verificar mensagens do servidor a cada ~1 segundo
+    -- Sincronização periódica com servidor Python
     if connected and totalFrames % 60 == 0 then
         checkServerMessages()
     end
 
-    -- Se ainda nao tiver ID definido, tenta detectar periodicamente
+    -- Identificação dinâmica de instância
     if (instanceId == "?" or instanceId == nil) and totalFrames % 30 == 0 then
         local detected = detectInstanceId()
         if detected then
@@ -468,42 +421,38 @@ local function onFrame()
         end
     end
 
-    -- Se recebeu sinal para parar, nao faz nada
     if shouldStop then
         releaseAll()
         return
     end
 
-    -- ========== MÁQUINA DE ESTADOS ==========
+    -- ========== MÁQUINA DE ESTADOS (100% GAMEPAD INPUT) ==========
 
     if currentState == STATE.INIT then
-        -- ── Inicio de uma nova tentativa ──
         if attempts == 0 then
-            pcall(function() emu:reset() end)   -- boot limpo na 1ª tentativa
+            pcall(function() emu:reset() end)
         end
         attempts = attempts + 1
         local instOffset = tonumber(instanceId) or 1
 
-        -- Re-detecta o alvo dinamicamente para garantir que alterações sejam refletidas
-        normalizedStarter, starterDisplayName = getNormalizedStarter(TARGET_STARTER)
+        -- Re-detecta o alvo dinamicamente para garantir sincronia com a interface
+        normalizedStarter, starterDisplayName, targetIdx, targetSpeciesId = getNormalizedStarter(TARGET_STARTER)
 
-        -- Variação estocástica para quebrar o RNG determinístico do Emerald
         titleExtra   = (math.random(0, TITLE_EXTRA_MAX) + instOffset * 7) % (TITLE_EXTRA_MAX + 1)
         loadingExtra = (math.random(0, LOADING_EXTRA_MAX) + instOffset * 13) % (LOADING_EXTRA_MAX + 1)
-        prevPV = 0
+        initialPV = 0
         releaseAll()
 
         console:log("========================================")
         console:log("  Tentativa #" .. attempts .. "  (Instancia #" .. instanceId .. ")")
         console:log("  Alvo: " .. starterDisplayName)
-        console:log("  Delays sorteados: title +" .. titleExtra .. " | loading +" .. loadingExtra)
+        console:log("  Delays: title +" .. titleExtra .. " | loading +" .. loadingExtra)
         console:log("========================================")
 
         sendMessage("ATTEMPT|" .. attempts)
         changeState(STATE.TITLE_WAIT)
 
     elseif currentState == STATE.TITLE_WAIT then
-        -- ── Espera o BIOS boot + logo Game Freak ──
         releaseAll()
         if stateFrames >= WAIT_AFTER_RESET + titleExtra then
             console:log("[State] Title screen (Rayquaza) - mashing A/Start...")
@@ -511,11 +460,9 @@ local function onFrame()
         end
 
     elseif currentState == STATE.TITLE_MASH then
-        -- ── Mash A e Start para passar a title screen ──
         local cycle = stateFrames % PRESS_INTERVAL
         if cycle == 0 then
-            pressKey(KEY_A)
-            pressKey(KEY_START)
+            pressKeys((1 << KEY_A) | (1 << KEY_START))
         elseif cycle == PRESS_HOLD_FRAMES then
             releaseAll()
         end
@@ -527,7 +474,6 @@ local function onFrame()
         end
 
     elseif currentState == STATE.CONTINUE then
-        -- ── Pressiona A para selecionar Continue e carregar o save ──
         local cycle = stateFrames % PRESS_INTERVAL
         if cycle == 0 then
             pressKey(KEY_A)
@@ -542,149 +488,164 @@ local function onFrame()
         end
 
     elseif currentState == STATE.LOADING then
-        -- ── Espera o jogo carregar completamente no mapa ──
         releaseAll()
         if stateFrames >= LOADING_WAIT + loadingExtra then
-            -- Le o PV inicial (deve ser 0 = party vazia)
-            prevPV = readPV()
-            if prevPV ~= 0 then
-                console:log("[AVISO] PV inicial nao-zero: " .. hex(prevPV))
-                console:log("[AVISO] O save ja possui um Pokemon na party (Slot 1)!")
-                console:log("[AVISO] Verificando se e shiny mesmo assim...")
-                changeState(STATE.CHECK_SHINY)
-            else
-                console:log("[State] Interagindo com a bolsa do Prof. Birch...")
-                changeState(STATE.OPEN_BAG)
-            end
+            -- Armazena o PV que estiver na memoria (0 no save normal) para detectar quando o novo Pokemon for gerado
+            initialPV = readPV()
+            console:log("[State] Jogo carregado no overworld. Interagindo com a bolsa do Prof. Birch...")
+            logToFile("Jogo carregado no overworld. Interagindo com a bolsa...")
+            changeState(STATE.OPEN_BAG)
         end
 
     elseif currentState == STATE.OPEN_BAG then
-        -- 1. Verifica se a bolsa do Prof. Birch já está aberta na memória
-        if isStarterBagOpen() then
+        -- 1. Se a tela da bolsa já está aberta e a task de input está pronta para ler D-pad:
+        if isStarterInputReady() then
             releaseAll()
-            console:log("[State] Bolsa aberta confirmada na memoria!")
-            console:log("[State] Navegando ate: " .. starterDisplayName)
-            logToFile("Bolsa aberta confirmada na memoria. Alvo: " .. starterDisplayName)
+            console:log("[State] Bolsa aberta e pronta para selecao! Alvo: " .. starterDisplayName)
+            logToFile("Bolsa aberta e pronta para selecao: " .. starterDisplayName)
             changeState(STATE.SELECT_STARTER)
             return
         end
 
-        -- 2. Se a bolsa ainda não abriu, pulsa A a cada 14 frames para interagir no overworld
-        local cycle = stateFrames % 14
+        -- 2. Se a bolsa já começou a abrir (fade-in), NUNCA aperte A para não selecionar Torchic acidentalmente!
+        if isStarterBagOpen() then
+            releaseAll()
+            return
+        end
+
+        -- 3. No overworld em frente a bolsa, dá UM toque em 'A' a cada 45 frames (~0.75s) para interagir
+        local cycle = stateFrames % 45
         if cycle == 0 then
             pressKey(KEY_A)
         elseif cycle == 5 then
             releaseAll()
         end
 
-        -- 3. Timeout de segurança: se após 360 frames (~6s) não detectar via memória, avança
-        if stateFrames >= 360 then
+        -- 4. Timeout de segurança: após 240 frames (~4s), se não detectou por memória, avança
+        if stateFrames >= 240 then
             releaseAll()
-            console:log("[AVISO] Timeout na deteccao de abertura da bolsa. Avancando para selecao...")
-            logToFile("AVISO: Timeout na deteccao da bolsa. Avancando...")
+            console:log("[State] Avancando para a selecao do inicial...")
             changeState(STATE.SELECT_STARTER)
         end
 
     elseif currentState == STATE.SELECT_STARTER then
-        -- Define o índice do inicial desejado (0=Treecko, 1=Torchic, 2=Mudkip)
-        local targetIdx = 1
-        if normalizedStarter == "treecko" then
-            targetIdx = 0
-        elseif normalizedStarter == "mudkip" then
-            targetIdx = 2
+        -- Garante uma pausa inicial de 10 frames com teclas soltas para resetar debounce de botões
+        if stateFrames < 10 then
+            releaseAll()
+            return
         end
 
-        -- Sincroniza a memória da Task com o alvo a cada frame
-        setStarterSelection(targetIdx)
+        local curSel = getStarterSelection()
 
-        -- Pulsa D-pad para movimentar visualmente o cursor/mão
-        if normalizedStarter == "treecko" then
-            if stateFrames == 5 or stateFrames == 20 then
-                pressKey(KEY_LEFT)
-            elseif stateFrames == 14 or stateFrames == 28 then
+        -- Se o alvo for MUDKIP (seta para a DIREITA ▶, índice 2):
+        if targetIdx == 2 then
+            -- Se o cursor do jogo já alcançou o slot 2 (Mudkip):
+            if curSel == 2 then
                 releaseAll()
+                -- Aguarda estabilização do cursor (~35 frames após selecionar)
+                if stateFrames >= 45 then
+                    console:log("[State] Mudkip selecionado no cursor (slot 2)! Abrindo Pokebola...")
+                    logToFile("Mudkip selecionado no cursor (slot 2)! Abrindo Pokebola...")
+                    changeState(STATE.OPEN_POKEBALL)
+                end
+                return
             end
-        elseif normalizedStarter == "mudkip" then
-            if stateFrames == 5 or stateFrames == 20 then
+
+            -- Pulsa D-Pad DIREITA a cada 16 frames até o jogo confirmar que mudou para o slot 2
+            local cycle = (stateFrames - 10) % 16
+            if cycle == 0 then
+                console:log("[Input] Pressionando D-Pad DIREITA para selecionar Mudkip...")
                 pressKey(KEY_RIGHT)
-            elseif stateFrames == 14 or stateFrames == 28 then
+            elseif cycle == 6 then
                 releaseAll()
             end
+
+        -- Se o alvo for TREECKO (seta para a ESQUERDA ◀, índice 0):
+        elseif targetIdx == 0 then
+            -- Se o cursor do jogo já alcançou o slot 0 (Treecko):
+            if curSel == 0 then
+                releaseAll()
+                if stateFrames >= 45 then
+                    console:log("[State] Treecko selecionado no cursor (slot 0)! Abrindo Pokebola...")
+                    logToFile("Treecko selecionado no cursor (slot 0)! Abrindo Pokebola...")
+                    changeState(STATE.OPEN_POKEBALL)
+                end
+                return
+            end
+
+            -- Pulsa D-Pad ESQUERDA a cada 16 frames até o jogo confirmar que mudou para o slot 0
+            local cycle = (stateFrames - 10) % 16
+            if cycle == 0 then
+                console:log("[Input] Pressionando D-Pad ESQUERDA para selecionar Treecko...")
+                pressKey(KEY_LEFT)
+            elseif cycle == 6 then
+                releaseAll()
+            end
+
+        -- Se o alvo for TORCHIC (centro ●, índice 1):
         else
             releaseAll()
+            if stateFrames >= 35 then
+                console:log("[State] Torchic mantido no centro (slot 1). Abrindo Pokebola...")
+                logToFile("Torchic mantido no centro (slot 1). Abrindo Pokebola...")
+                changeState(STATE.OPEN_POKEBALL)
+            end
         end
 
-        -- Aguarda 40 frames (~0.7s) para a animação do cursor se estabilizar
-        if stateFrames >= 40 then
-            setStarterSelection(targetIdx)
+        -- Timeout de segurança: após 180 frames avança
+        if stateFrames >= 180 then
             releaseAll()
-            local cur = getStarterSelection()
-            console:log(string.format("[State] Cursor finalizado em: %s (slot=%d)", starterDisplayName, cur))
-            logToFile(string.format("Cursor finalizado em: %s (slot=%d)", starterDisplayName, cur))
+            changeState(STATE.OPEN_POKEBALL)
+        end
+
+    elseif currentState == STATE.OPEN_POKEBALL then
+        -- No frame 10, pressiona 'A' para abrir o zoom da Pokébola do inicial selecionado
+        if stateFrames == 10 then
+            console:log("[State] Abrindo Pokebola de " .. starterDisplayName .. "...")
+            pressKey(KEY_A)
+        elseif stateFrames == 16 then
+            releaseAll()
+        end
+
+        -- Aguarda o zoom do círculo branco, o cry e a caixa YES/NO surgirem (~80 frames)
+        if stateFrames >= 80 then
+            releaseAll()
+            console:log("[State] Confirmando 'SIM' para " .. starterDisplayName .. "...")
+            logToFile("Confirmando 'SIM' para " .. starterDisplayName)
             changeState(STATE.CONFIRM_CHOICE)
         end
 
     elseif currentState == STATE.CONFIRM_CHOICE then
-        local targetIdx = 1
-        if normalizedStarter == "treecko" then
-            targetIdx = 0
-        elseif normalizedStarter == "mudkip" then
-            targetIdx = 2
-        end
-
-        -- Dupla segurança: antes de apertar A, reafirma o índice no jogo
-        setStarterSelection(targetIdx)
-
-        -- Pressiona A do frame 5 ao 15 para abrir o zoom da Pokebola
-        if stateFrames == 5 then
-            pressKey(KEY_A)
-        elseif stateFrames == 15 then
-            releaseAll()
-        end
-
-        -- Aguarda a animação de zoom, o cry do Pokémon e o diálogo YES/NO surgirem (~75 frames)
-        if stateFrames >= 75 then
-            releaseAll()
-            console:log("[State] Confirmando 'SIM' para " .. starterDisplayName .. "...")
-            logToFile("Confirmando 'SIM' para " .. starterDisplayName)
-            changeState(STATE.MASHING)
-        end
-
-    elseif currentState == STATE.MASHING then
-        -- ── Mash A para confirmar YES na pergunta e iniciar a batalha ──
-        -- Monitora o PV do slot 1 a cada frame
+        -- Monitora o PV do slot 1: quando for gerado e diferir do inicial, o Pokémon chegou!
         local currentPV = readPV()
 
-        -- Detecta transicao: PV foi de 0 -> nao-zero = Pokemon gerado!
-        if currentPV ~= 0 and prevPV == 0 then
+        if currentPV ~= 0 and currentPV ~= initialPV then
             releaseAll()
             console:log("")
-            console:log("[!!!] Pokemon recebido na party (Slot 1)!")
+            console:log("[!!!] Pokemon recebido legitimamente na party (Slot 1)!")
             console:log("[!!!] PV = " .. hex(currentPV))
-            logToFile("Pokemon recebido na party! PV = " .. hex(currentPV))
+            logToFile("Pokemon recebido legitimamente! PV = " .. hex(currentPV))
             changeState(STATE.CHECK_SHINY)
             return
         end
-        prevPV = currentPV
 
-        -- Pressiona A em intervalos regulares para confirmar YES
-        local cycle = stateFrames % PRESS_INTERVAL
+        -- Pulsa 'A' a cada 10 frames para confirmar 'YES' e passar o dialogo do Birch
+        local cycle = stateFrames % 10
         if cycle == 0 then
             pressKey(KEY_A)
-        elseif cycle == PRESS_HOLD_FRAMES then
+        elseif cycle == 4 then
             releaseAll()
         end
 
         -- Timeout de seguranca
         if stateFrames >= MASH_TIMEOUT then
             releaseAll()
-            console:log("[AVISO] Timeout no mashing da bolsa! Resetando...")
-            logToFile("AVISO: Timeout no mashing da bolsa. Resetando...")
+            console:log("[AVISO] Timeout na confirmacao! Resetando...")
+            logToFile("AVISO: Timeout na confirmacao. Resetando...")
             changeState(STATE.RESETTING)
         end
 
     elseif currentState == STATE.CHECK_SHINY then
-        -- ── Le PV e OTID e calcula o XOR para verificar se e shiny ──
         if stateFrames < 5 then
             releaseAll()
             return
@@ -722,18 +683,14 @@ local function onFrame()
         console:log("  XOR:             " .. xorVal .. " (shiny se < 8)")
         logToFile(string.format("Check: alvo=%s, obtido=%s, PV=%s, OTID=%s, XOR=%d", starterDisplayName, actualName, hex(pv), hex(otid), xorVal))
 
-        -- Validação estrita de espécie: se a espécie obtida não for a esperada, descarta
+        -- Validação estrita de espécie
         local isCorrectSpecies = true
-        if normalizedStarter == "treecko" and speciesId ~= 277 and speciesId ~= 0 then
-            isCorrectSpecies = false
-        elseif normalizedStarter == "torchic" and speciesId ~= 280 and speciesId ~= 0 then
-            isCorrectSpecies = false
-        elseif normalizedStarter == "mudkip" and speciesId ~= 283 and speciesId ~= 0 then
+        if targetSpeciesId and targetSpeciesId ~= 0 and speciesId ~= 0 and speciesId ~= targetSpeciesId then
             isCorrectSpecies = false
         end
 
         if not isCorrectSpecies then
-            console:log("  [ALERTA] Especie obtida (" .. actualName .. ") difere do alvo configurado! Descartando e resetando...")
+            console:log("  [ALERTA] Especie obtida (" .. actualName .. ") difere do alvo configurado (" .. starterDisplayName .. ")! Resetando...")
             logToFile("ALERTA: Especie obtida difere do alvo configurado. Resetando...")
             changeState(STATE.RESETTING)
             return
@@ -758,7 +715,6 @@ local function onFrame()
         end
 
     elseif currentState == STATE.SHINY_FOUND then
-        -- ── SHINY ENCONTRADO! ──
         releaseAll()
 
         local pv   = readPV()
@@ -796,23 +752,18 @@ local function onFrame()
         console:log("  Voce pode carregar o save state (Slot 1) e continuar jogando!")
         console:log("")
 
-        -- Notifica o servidor Python
         sendMessage("SHINY|" .. hex(pv) .. "|" .. hex(otid) .. "|" .. attempts)
-
         changeState(STATE.DONE)
 
     elseif currentState == STATE.RESETTING then
-        -- ── Espera alguns frames e reseta o emulador ──
         releaseAll()
-        if stateFrames >= 30 then
+        if stateFrames >= 25 then
             sendMessage("RESET|" .. attempts)
             pcall(function() emu:reset() end)
-            prevPV = 0
             changeState(STATE.INIT)
         end
 
     elseif currentState == STATE.DONE then
-        -- ── Fim! Mantem estado intacto ──
         releaseAll()
     end
 end
@@ -831,7 +782,6 @@ console:log("    Party Slot 1 PV:   " .. hex(ADDR_PARTY_PV))
 console:log("    Party Slot 1 OTID: " .. hex(ADDR_PARTY_OTID))
 console:log("")
 
--- Tenta identificar a instancia localmente antes de conectar
 local detected = detectInstanceId()
 if detected then
     instanceId = tostring(detected)
@@ -846,7 +796,6 @@ else
     end)
 end
 
--- Tenta conectar ao servidor Python
 connectToServer()
 if connected then
     if detected then
@@ -856,13 +805,8 @@ if connected then
     end
 end
 
--- Registra callbacks do mGBA
+-- Registra callback de frame (sem callbacks invasivos)
 callbacks:add("frame", onFrame)
-callbacks:add("keysRead", function()
-    if currentKeys ~= 0 then
-        pcall(function() emu:setKeys(currentKeys) end)
-    end
-end)
 
 console:log("")
 console:log("  Script carregado! O shiny hunting vai comecar em breve...")
