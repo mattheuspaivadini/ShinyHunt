@@ -421,6 +421,11 @@ end
 --- Le o indice atual da selecao na tela de iniciais (SOMENTE LEITURA)
 --- 0 = Treecko, 1 = Torchic, 2 = Mudkip
 local function getStarterSelection()
+    -- Se a bolsa NÃO estiver aberta, nunca retorna índice de inicial (evita falso positivo no Overworld)
+    if not isStarterBagOpen() then
+        return -1
+    end
+
     -- 1. Verifica Task 0 diretamente
     local ok, sel = pcall(function() return emu:read16(ADDR_TASK0_STARTER) end)
     if ok and sel and sel >= 0 and sel <= 2 then
@@ -447,10 +452,6 @@ local function getStarterSelection()
                 end
             end
         end
-    end
-
-    if ok and sel and sel >= 0 and sel <= 2 then
-        return sel
     end
 
     return -1
@@ -661,19 +662,21 @@ local function onFrame()
     elseif currentState == STATE.TITLE_WAIT then
         releaseAll()
 
-        -- Se por acaso ja estiver no Menu Principal, Overworld ou Bolsa:
-        if isStarterBagOpen() then
-            console:log("[State] Bolsa detectada precocemente! Indo para selecao...")
-            changeState(STATE.SELECT_STARTER)
-            return
-        elseif isOverworldOpen() then
-            console:log("[State] Overworld detectado precocemente! Indo para interacao com a bolsa...")
-            changeState(STATE.OPEN_BAG)
-            return
-        elseif isMainMenuOpen() then
-            console:log("[State] Menu Principal detectado! Indo para selecao de Continue...")
-            changeState(STATE.MAIN_MENU)
-            return
+        -- Se ja passou da BIOS (>60 frames) e detectar Menu Principal, Overworld ou Bolsa:
+        if stateFrames >= 60 then
+            if isStarterBagOpen() then
+                console:log("[State] Bolsa detectada precocemente! Indo para selecao...")
+                changeState(STATE.SELECT_STARTER)
+                return
+            elseif isOverworldOpen() then
+                console:log("[State] Overworld detectado precocemente! Indo para interacao com a bolsa...")
+                changeState(STATE.OPEN_BAG)
+                return
+            elseif isMainMenuOpen() then
+                console:log("[State] Menu Principal detectado! Indo para selecao de Continue...")
+                changeState(STATE.MAIN_MENU)
+                return
+            end
         end
 
         -- Espera intro inicial (~240 frames = 4s) + delay de RNG
@@ -736,44 +739,57 @@ local function onFrame()
             return
         end
 
+        -- Se o menu principal ja fechou (iniciou fade/carregamento do save):
+        if not isMainMenuOpen() then
+            releaseAll()
+            console:log("[State] Menu Principal fechado! Aguardando carregamento do save...")
+            changeState(STATE.LOADING)
+            return
+        end
+
         -- No Menu Principal, o cursor comeca em "CONTINUE" por padrao quando ha save.
-        -- Dá UM UNICO toque firme em 'A' (frames 25 a 30) e NUNCA fica repetindo!
-        if stateFrames >= 25 and stateFrames <= 30 then
-            if stateFrames == 25 then
-                console:log("[State] Selecionando 'Continue' no Menu Principal (toque unico)...")
+        -- Envia pulsos firmes em 'A' a cada 20 frames (frames 25, 45, 65...) caso o primeiro toque ocorra durante fade
+        local menuCycle = (stateFrames - 25) % 20
+        if menuCycle < 6 then
+            if menuCycle == 0 then
+                console:log("[State] Selecionando 'Continue' no Menu Principal...")
             end
             pressKey(KEY_A)
         else
             releaseAll()
         end
 
-        -- Apos confirmar 'Continue', avanca para LOADING apos frame 50
-        if stateFrames >= 50 then
+        -- Timeout de seguranca no Menu Principal: apos 180 frames sem fechar o menu, reseta
+        if stateFrames >= 180 then
             releaseAll()
-            console:log("[State] Aguardando carregamento do save no Overworld...")
-            changeState(STATE.LOADING)
+            console:log("[AVISO] Timeout no Menu Principal (save nao carregou). Resetando...")
+            logToFile("AVISO: Timeout no Menu Principal. Resetando...")
+            changeState(STATE.RESETTING)
+            return
         end
 
     elseif currentState == STATE.LOADING then
         -- DURANTE O CARREGAMENTO DO SAVE, NENHUM BOTAO PODE SER PRESSIONADO!
         releaseAll()
 
-        -- O atraso de loading so vale se for realmente cumprido. Antes, a deteccao por
-        -- memoria (isOverworldOpen) saia daqui imediatamente e descartava loadingExtra
-        -- na maioria das tentativas, reduzindo a varredura a poucos valores.
-        -- Agora a memoria apenas informa que o save carregou; a saida so acontece depois
-        -- de 90 + loadingExtra frames, com o jogo parado e sem botao (o loop principal
-        -- continua rodando, entao o RNG avanca 1x por frame como esperado).
+        -- O atraso de loading so vale se for realmente cumprido.
         if stateFrames >= 90 + loadingExtra then
             initialPV = readPV()
             if isStarterBagOpen() then
                 console:log("[State] Bolsa detectada! Indo para a selecao do inicial...")
                 logToFile("Bolsa detectada apos o atraso de loading. Indo para a selecao...")
                 changeState(STATE.SELECT_STARTER)
-            else
+            elseif isOverworldOpen() then
                 console:log("[State] Jogo carregado no Overworld! Interagindo com a bolsa...")
                 logToFile("Jogo carregado no overworld. Interagindo com a bolsa...")
                 changeState(STATE.OPEN_BAG)
+            else
+                -- Se ainda nao carregou o overworld nem a bolsa, aguarda margem de seguranca
+                if stateFrames >= 180 + loadingExtra then
+                    console:log("[AVISO] Overworld nao detectado apos loading. Resetando...")
+                    logToFile("AVISO: Overworld nao detectado apos loading. Resetando...")
+                    changeState(STATE.RESETTING)
+                end
             end
         elseif isStarterBagOpen() or isOverworldOpen() then
             -- Save ja carregou, mas o atraso ainda nao terminou: apenas espera em silencio
@@ -784,7 +800,7 @@ local function onFrame()
         -- 1. Se a task de input da bolsa já está pronta para receber comando:
         if isStarterInputReady() then
             releaseAll()
-            if stateFrames >= 25 then
+            if stateFrames >= 20 then
                 console:log("[State] Bolsa aberta e pronta para selecao! Alvo: " .. starterDisplayName)
                 logToFile("Bolsa aberta e pronta para selecao: " .. starterDisplayName)
                 changeState(STATE.SELECT_STARTER)
@@ -804,26 +820,34 @@ local function onFrame()
             return
         end
 
-        -- Dá UM TOQUE isolado em 'A' (frames 20 a 26) para abrir a bolsa
-        if stateFrames >= 20 and stateFrames <= 26 then
+        -- Envia pulsos de 'A' cadenciados a cada 25 frames (segura 6 frames, solta 19)
+        -- para abrir a bolsa com seguranca mesmo se uma tentativa coincidir com movimento de NPC
+        local bagCycle = (stateFrames - 20) % 25
+        if bagCycle < 6 then
             pressKey(KEY_A)
         else
             releaseAll()
         end
 
-        -- Se a bolsa ainda nao abriu apos 90 frames, da mais um unico toque de seguranca
-        if stateFrames >= 90 and stateFrames <= 96 then
-            pressKey(KEY_A)
-        end
-
-        -- Timeout de seguranca
-        if stateFrames >= 240 then
+        -- Timeout de seguranca: se a bolsa NAO abriu em 300 frames, NUNCA avance para SELECT_STARTER!
+        -- Reseta para reiniciar a tentativa de forma limpa
+        if stateFrames >= 300 then
             releaseAll()
-            console:log("[State] Timeout aguardando bolsa. Avancando para selecao...")
-            changeState(STATE.SELECT_STARTER)
+            console:log("[AVISO] Timeout aguardando abertura da bolsa. Resetando...")
+            logToFile("AVISO: Timeout aguardando abertura da bolsa. Resetando...")
+            changeState(STATE.RESETTING)
         end
 
     elseif currentState == STATE.SELECT_STARTER then
+        -- Trava de seguranca estrita: se a bolsa nao esta aberta, NUNCA envie comandos de selecao!
+        if not isStarterBagOpen() then
+            releaseAll()
+            console:log("[ALERTA] Bolsa nao detectada durante selecao de inicial! Resetando...")
+            logToFile("ALERTA: Bolsa nao detectada durante selecao de inicial. Resetando...")
+            changeState(STATE.RESETTING)
+            return
+        end
+
         -- Pausa inicial de 25 frames com tudo solto para garantir que a animacao da bolsa terminou
         if stateFrames < 25 then
             releaseAll()
@@ -909,12 +933,22 @@ local function onFrame()
             if curSel == targetIdx then
                 changeState(STATE.OPEN_POKEBALL)
             else
-                console:log("[AVISO] Cursor nao estabilizou no alvo (" .. tostring(curSel) .. " != " .. tostring(targetIdx) .. "). Reajustando...")
-                changeState(STATE.SELECT_STARTER)
+                console:log("[AVISO] Cursor nao estabilizou no alvo (" .. tostring(curSel) .. " != " .. tostring(targetIdx) .. "). Resetando...")
+                logToFile("AVISO: Cursor nao estabilizou no alvo. Resetando...")
+                changeState(STATE.RESETTING)
             end
         end
 
     elseif currentState == STATE.OPEN_POKEBALL then
+        -- Trava de seguranca: verifica se a bolsa continua aberta
+        if not isStarterBagOpen() then
+            releaseAll()
+            console:log("[ALERTA] Bolsa fechada durante abertura da Pokebola! Resetando...")
+            logToFile("ALERTA: Bolsa fechada durante abertura da Pokebola. Resetando...")
+            changeState(STATE.RESETTING)
+            return
+        end
+
         -- Trava ABSOLUTA de seguranca: se o cursor estiver fora do alvo, NUNCA aperte 'A'!
         local curSel = getStarterSelection()
         if curSel ~= -1 and curSel ~= targetIdx then
