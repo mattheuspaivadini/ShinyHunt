@@ -631,6 +631,32 @@ class InstanceManager:
             if inst_sav.stat().st_size != sav_path.stat().st_size:
                 raise IOError(f"Cópia do SAV corrompida na instância {i}")
 
+        # Para Emerald, sincroniza TARGET_STARTER no script raiz e grava emerald_starter.txt
+        if self.config.game == "emerald":
+            try:
+                starter_chosen = self.config.emerald_starter.strip().lower()
+                (SCRIPT_DIR / "emerald_starter.txt").write_text(f"{starter_chosen}\n", encoding="utf-8")
+                try:
+                    (Path(self.config.rom_path).parent / "emerald_starter.txt").write_text(f"{starter_chosen}\n", encoding="utf-8")
+                except Exception:
+                    pass
+
+                # Atualiza diretamente o script raiz iniciais_emerald.lua
+                if EMERALD_LUA_PATH.exists():
+                    import re
+                    lua_text = EMERALD_LUA_PATH.read_text(encoding="utf-8")
+                    lua_text = re.sub(
+                        r'local TARGET_STARTER\s*=\s*.*',
+                        f'local TARGET_STARTER = "{starter_chosen}"',
+                        lua_text
+                    )
+                    EMERALD_LUA_PATH.write_text(lua_text, encoding="utf-8")
+                    dist_lua = SCRIPT_DIR / "dist" / "iniciais_emerald.lua"
+                    if dist_lua.exists():
+                        dist_lua.write_text(lua_text, encoding="utf-8")
+            except Exception:
+                pass
+
         # Pré-configura o script atual no histórico [recentScripts] do mGBA (qt.ini)
         # e copia automaticamente o caminho completo para a Área de Transferência
         try:

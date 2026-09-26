@@ -1009,6 +1009,26 @@ class ShinyHuntGUI:
         self.var_target.set(starter)
         self.entry_lua.delete(0, tk.END)
         self.entry_lua.insert(0, str(EMERALD_LUA_PATH))
+
+        # Atualiza imediatamente TARGET_STARTER no arquivo iniciais_emerald.lua raiz e em dist
+        try:
+            starter_val = starter.strip().lower()
+            if EMERALD_LUA_PATH.exists():
+                import re
+                txt = EMERALD_LUA_PATH.read_text(encoding="utf-8")
+                txt = re.sub(
+                    r'local TARGET_STARTER\s*=\s*.*',
+                    f'local TARGET_STARTER = "{starter_val}"',
+                    txt
+                )
+                EMERALD_LUA_PATH.write_text(txt, encoding="utf-8")
+                dist_lua = EMERALD_LUA_PATH.parent / "dist" / "iniciais_emerald.lua"
+                if dist_lua.exists():
+                    dist_lua.write_text(txt, encoding="utf-8")
+            (EMERALD_LUA_PATH.parent / "emerald_starter.txt").write_text(f"{starter_val}\n", encoding="utf-8")
+        except Exception:
+            pass
+
         names = {
             "treecko": "Treecko (Planta - Seta Esquerda ◀)",
             "torchic": "Torchic (Fogo - Centro ●)",

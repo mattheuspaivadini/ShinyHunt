@@ -61,11 +61,10 @@ local WAIT_AFTER_RESET    = 360   -- ~6.0s: espera BIOS + intro Game Freak (estr
 local TITLE_MASH_DURATION = 240   -- ~4.0s: mash A/Start na title screen (Rayquaza)
 local CONTINUE_DURATION   = 180   -- ~3.0s: selecionar Continue e carregar o save
 local LOADING_WAIT        = 150   -- ~2.5s: espera o jogo carregar no overworld
-local OPEN_BAG_WAIT       = 90    -- ~1.5s: espera animacao de fade e abertura da bolsa
-local NAVIGATE_WAIT       = 25    -- ~0.4s: espera cursor se mover na bolsa
+local OPEN_BAG_WAIT       = 150   -- ~2.5s: espera animacao de fade e abertura completa da bolsa
 local MASH_TIMEOUT        = 3600  -- ~60s: timeout de seguranca
-local PRESS_INTERVAL      = 15    -- Pressionar botao a cada 15 frames (~4x/s)
-local PRESS_HOLD_FRAMES   = 3     -- Manter botao pressionado por 3 frames
+local PRESS_INTERVAL      = 12    -- Pressionar botao a cada 12 frames (~5x/s)
+local PRESS_HOLD_FRAMES   = 4     -- Manter botao pressionado por 4 frames
 
 -- Atraso extra maximo (em frames) sorteado a cada tentativa (garante variacao de RNG)
 -- Nota para Emerald: o PRNG sempre comeca em seed 0 no boot, entao a variacao
@@ -83,6 +82,7 @@ local STATE = {
     LOADING         = "LOADING",
     OPEN_BAG        = "OPEN_BAG",
     SELECT_STARTER  = "SELECT_STARTER",
+    CONFIRM_CHOICE  = "CONFIRM_CHOICE",
     MASHING         = "MASHING",
     CHECK_SHINY     = "CHECK_SHINY",
     SHINY_FOUND     = "SHINY_FOUND",
@@ -94,21 +94,63 @@ local STATE = {
 
 local function getNormalizedStarter(starterStr)
     local s = starterStr
-    -- Se não foi definido especificamente no header, tenta ler do ambiente ou de emerald_starter.txt
-    if not s or s == "" or s == "treecko" then
-        if os and type(os.getenv) == "function" then
-            local ok, envVal = pcall(function() return os.getenv("SHINY_EMERALD_STARTER") end)
-            if ok and envVal and envVal ~= "" then
-                s = envVal
-            end
+
+    -- 1. Se starterStr não veio definido ou está vazio, usa TARGET_STARTER global
+    if not s or s == "" then
+        s = TARGET_STARTER
+    end
+
+    -- 2. Tenta ler variável de ambiente repassada pelo processo Python
+    if os and type(os.getenv) == "function" then
+        local ok, envVal = pcall(function() return os.getenv("SHINY_EMERALD_STARTER") end)
+        if ok and envVal and envVal ~= "" then
+            s = envVal
         end
-        if (not s or s == "" or s == "treecko") and io and type(io.open) == "function" then
-            local ok, f = pcall(function() return io.open("emerald_starter.txt", "r") end)
+    end
+
+    -- 3. Tenta ler de emerald_starter.txt em múltiplos caminhos
+    if io and type(io.open) == "function" then
+        local candidates = {
+            "emerald_starter.txt",
+            "../emerald_starter.txt",
+            "instances/emerald_starter.txt",
+            "C:/roms/FireRed/emerald_starter.txt",
+            "C:/roms/emerald_starter.txt"
+        }
+        for _, path in ipairs(candidates) do
+            local ok, f = pcall(function() return io.open(path, "r") end)
             if ok and f then
                 local content = f:read("*all")
                 f:close()
                 if content and content ~= "" then
-                    s = content
+                    local trimmed = content:gsub("%s+", "")
+                    if trimmed ~= "" then
+                        s = trimmed
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    -- 4. Tenta ler de config.json
+    if io and type(io.open) == "function" then
+        local configCandidates = {
+            "config.json",
+            "../config.json",
+            "../../config.json"
+        }
+        for _, path in ipairs(configCandidates) do
+            local ok, f = pcall(function() return io.open(path, "r") end)
+            if ok and f then
+                local content = f:read("*all")
+                f:close()
+                if content and content ~= "" then
+                    local val = content:match('"emerald_starter"%s*:%s*"([^"]+)"')
+                    if val and val ~= "" then
+                        s = val
+                        break
+                    end
                 end
             end
         end
@@ -351,6 +393,9 @@ local function onFrame()
         attempts = attempts + 1
         local instOffset = tonumber(instanceId) or 1
 
+        -- Re-detecta o alvo dinamicamente para garantir que alterações sejam refletidas
+        normalizedStarter, starterDisplayName = getNormalizedStarter(TARGET_STARTER)
+
         -- Variação estocástica para quebrar o RNG determinístico do Emerald
         titleExtra   = (math.random(0, TITLE_EXTRA_MAX) + instOffset * 7) % (TITLE_EXTRA_MAX + 1)
         loadingExtra = (math.random(0, LOADING_EXTRA_MAX) + instOffset * 13) % (LOADING_EXTRA_MAX + 1)
@@ -424,13 +469,14 @@ local function onFrame()
 
     elseif currentState == STATE.OPEN_BAG then
         -- ── Interage com a bolsa no chao para abrir a tela de escolha ──
-        if stateFrames == 1 or stateFrames == 20 then
+        if stateFrames == 1 or stateFrames == 20 or stateFrames == 40 then
             pressKey(KEY_A)
-        elseif stateFrames == 5 or stateFrames == 25 then
+        elseif stateFrames == 8 or stateFrames == 28 or stateFrames == 48 then
             releaseAll()
         end
 
         -- Aguarda o fade out, inicializacao grafica e fade in da bolsa
+        -- Necessita de ~2.5s (150 frames) para tela estar 100% pronta para navegacao
         if stateFrames >= OPEN_BAG_WAIT then
             releaseAll()
             console:log("[State] Bolsa aberta! Navegando ate: " .. starterDisplayName .. "...")
@@ -442,41 +488,60 @@ local function onFrame()
         -- O cursor padrao do jogo comeca no meio: Torchic (index 1)
         if normalizedStarter == "treecko" then
             -- Mover para a esquerda (Treecko = index 0)
-            if stateFrames == 1 then
+            -- Envia 3 pulsos firmes de KEY_LEFT espaçados por 20 frames
+            if stateFrames == 10 or stateFrames == 30 or stateFrames == 50 then
                 pressKey(KEY_LEFT)
-            elseif stateFrames == 5 then
+            elseif stateFrames == 20 or stateFrames == 40 or stateFrames == 60 then
                 releaseAll()
             end
-            if stateFrames >= NAVIGATE_WAIT then
+
+            if stateFrames >= 80 then
                 releaseAll()
-                console:log("[State] Posicionado em Treecko! Confirmando selecao...")
-                changeState(STATE.MASHING)
+                console:log("[State] Posicionado em Treecko! Abrindo Pokebola...")
+                changeState(STATE.CONFIRM_CHOICE)
             end
 
         elseif normalizedStarter == "mudkip" then
             -- Mover para a direita (Mudkip = index 2)
-            if stateFrames == 1 then
+            -- Envia 3 pulsos firmes de KEY_RIGHT espaçados por 20 frames
+            if stateFrames == 10 or stateFrames == 30 or stateFrames == 50 then
                 pressKey(KEY_RIGHT)
-            elseif stateFrames == 5 then
+            elseif stateFrames == 20 or stateFrames == 40 or stateFrames == 60 then
                 releaseAll()
             end
-            if stateFrames >= NAVIGATE_WAIT then
+
+            if stateFrames >= 80 then
                 releaseAll()
-                console:log("[State] Posicionado em Mudkip! Confirmando selecao...")
-                changeState(STATE.MASHING)
+                console:log("[State] Posicionado em Mudkip! Abrindo Pokebola...")
+                changeState(STATE.CONFIRM_CHOICE)
             end
 
         else
             -- Torchic já é a posição central padrão do jogo
             releaseAll()
-            if stateFrames >= 10 then
-                console:log("[State] Posicionado em Torchic! Confirmando selecao...")
-                changeState(STATE.MASHING)
+            if stateFrames >= 40 then
+                console:log("[State] Posicionado em Torchic! Abrindo Pokebola...")
+                changeState(STATE.CONFIRM_CHOICE)
             end
         end
 
+    elseif currentState == STATE.CONFIRM_CHOICE then
+        -- ── Pressiona A na Pokebola escolhida para abrir o zoom e a pergunta ──
+        if stateFrames == 1 or stateFrames == 20 then
+            pressKey(KEY_A)
+        elseif stateFrames == 8 or stateFrames == 28 then
+            releaseAll()
+        end
+
+        -- Aguarda o zoom do circulo branco e o dialogo 'Do you choose this POKéMON? YES / NO'
+        if stateFrames >= 70 then
+            releaseAll()
+            console:log("[State] Confirmando 'SIM' para " .. starterDisplayName .. "...")
+            changeState(STATE.MASHING)
+        end
+
     elseif currentState == STATE.MASHING then
-        -- ── Mash A para abrir a Pokebola e confirmar SIM na pergunta ──
+        -- ── Mash A para confirmar YES na pergunta e iniciar a batalha ──
         -- Monitora o PV do slot 1 a cada frame
         local currentPV = readPV()
 
@@ -491,7 +556,7 @@ local function onFrame()
         end
         prevPV = currentPV
 
-        -- Pressiona A em intervalos regulares para escolher a bola e confirmar YES
+        -- Pressiona A em intervalos regulares para confirmar YES
         local cycle = stateFrames % PRESS_INTERVAL
         if cycle == 0 then
             pressKey(KEY_A)

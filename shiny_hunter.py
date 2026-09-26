@@ -729,6 +729,24 @@ def run_cli():
         elif arg == "--lua" and i + 1 < len(sys.argv):
             LUA_SCRIPT = Path(sys.argv[i + 1]).resolve()
 
+    if SELECTED_GAME == "emerald":
+        try:
+            (SCRIPT_DIR / "emerald_starter.txt").write_text(f"{TARGET_STARTER}\n", encoding="utf-8")
+            if EMERALD_LUA_SCRIPT.exists():
+                import re
+                txt = EMERALD_LUA_SCRIPT.read_text(encoding="utf-8")
+                txt = re.sub(
+                    r'local TARGET_STARTER\s*=\s*.*',
+                    f'local TARGET_STARTER = "{TARGET_STARTER}"',
+                    txt
+                )
+                EMERALD_LUA_SCRIPT.write_text(txt, encoding="utf-8")
+                dist_lua = SCRIPT_DIR / "dist" / "iniciais_emerald.lua"
+                if dist_lua.exists():
+                    dist_lua.write_text(txt, encoding="utf-8")
+        except Exception:
+            pass
+
     print_banner()
     print_prerequisites()
 
