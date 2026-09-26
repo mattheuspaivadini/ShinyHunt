@@ -146,6 +146,88 @@ def calculate_shiny_chance(total_attempts: int, base_chance: int = 8192) -> floa
     return prob * 100.0
 
 
+def copy_to_clipboard(text: str) -> bool:
+    """Copia uma string para a área de transferência do Windows."""
+    if not text:
+        return False
+    try:
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.run(
+            ["clip"],
+            input=text.strip().encode("utf-16le"),
+            check=True,
+            creationflags=creationflags,
+        )
+        return True
+    except Exception:
+        pass
+    try:
+        import tkinter as tk
+        r = tk.Tk()
+        r.withdraw()
+        r.clipboard_clear()
+        r.clipboard_append(text.strip())
+        r.update()
+        r.destroy()
+        return True
+    except Exception:
+        pass
+    return False
+
+
+def register_mgba_recent_script(script_path: Path) -> bool:
+    """
+    Insere o script especificado no topo da lista [recentScripts] do mGBA (qt.ini).
+    Assim, ao abrir o mGBA e ir em Tools > Scripting > File > Recent scripts,
+    o script atual estará imediatamente disponível na 1ª posição (slot 0).
+    """
+    try:
+        appdata = os.environ.get("APPDATA", "")
+        if not appdata:
+            return False
+        ini_path = Path(appdata) / "mGBA" / "qt.ini"
+        if not ini_path.parent.exists():
+            ini_path.parent.mkdir(parents=True, exist_ok=True)
+
+        clean_path = str(Path(script_path).resolve()).replace("\\", "/")
+        existing_scripts: List[str] = []
+
+        content = ""
+        if ini_path.exists():
+            try:
+                content = ini_path.read_text(encoding="utf-8")
+            except Exception:
+                content = ini_path.read_text(encoding="latin-1", errors="ignore")
+
+        import re
+        match = re.search(r"\[recentScripts\]\s*([\s\S]*?)(?=\n\[|\Z)", content)
+        if match:
+            for line in match.group(1).splitlines():
+                line = line.strip()
+                if "=" in line:
+                    _, val = line.split("=", 1)
+                    val = val.strip().strip('"').replace("\\", "/")
+                    if val and val.lower() != clean_path.lower() and val not in existing_scripts:
+                        existing_scripts.append(val)
+
+        new_list = [clean_path] + existing_scripts[:9]
+        lines = ["[recentScripts]"]
+        for idx, s in enumerate(new_list):
+            lines.append(f"{idx}={s}")
+        new_section = "\n".join(lines)
+
+        if match:
+            new_content = content[:match.start()] + new_section + content[match.end():]
+        else:
+            new_content = content.rstrip() + ("\n\n" if content else "") + new_section + "\n"
+
+        ini_path.write_text(new_content, encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+
 class ShinyServer:
     """
     Servidor TCP que coordena as instâncias Lua do mGBA.
@@ -533,6 +615,13 @@ class InstanceManager:
             except Exception:
                 pass
 
+            # Se for Pokémon Emerald, cria arquivo emerald_starter.txt na pasta da instância
+            if self.config.game == "emerald":
+                try:
+                    (inst_dir / "emerald_starter.txt").write_text(f"{self.config.emerald_starter}\n", encoding="utf-8")
+                except Exception:
+                    pass
+
             # Cria script shiny_hunt.lua com ID pré-configurado na pasta da instância
             self._create_instance_lua_script(inst_dir, i)
 
@@ -541,6 +630,15 @@ class InstanceManager:
                 raise IOError(f"Cópia da ROM corrompida na instância {i}")
             if inst_sav.stat().st_size != sav_path.stat().st_size:
                 raise IOError(f"Cópia do SAV corrompida na instância {i}")
+
+        # Pré-configura o script atual no histórico [recentScripts] do mGBA (qt.ini)
+        # e copia automaticamente o caminho completo para a Área de Transferência
+        try:
+            target_lua = Path(self.config.lua_script_path).resolve()
+            register_mgba_recent_script(target_lua)
+            copy_to_clipboard(str(target_lua))
+        except Exception:
+            pass
 
         return self.instance_dirs
 
@@ -559,6 +657,8 @@ class InstanceManager:
             inst_rom = inst_dir / rom_name
             env = os.environ.copy()
             env["SHINY_INSTANCE_ID"] = str(i)
+            if self.config.game == "emerald":
+                env["SHINY_EMERALD_STARTER"] = self.config.emerald_starter
             try:
                 proc = subprocess.Popen(
                     [self.config.mgba_path, str(inst_rom)],

@@ -49,11 +49,12 @@ Na interface gráfica:
 3. Ajuste a quantidade de instâncias desejada (padrão: 10).
 4. Clique em **Iniciar Caçada**.
 
-#### 4. Carregar o Script Lua
+#### 4. Carregar o Script Lua (Super Prático!)
+Ao clicar em **Iniciar Caçada**, o programa pré-configura o histórico do mGBA (`qt.ini`) e copia o caminho do script ativo para a sua Área de Transferência (Clipboard) automaticamente!
+
 Em cada janela aberta do mGBA:
-1. Acesse **Tools** > **Scripting...**
-2. Clique em **File** > **Load script...**
-3. Selecione o arquivo `shiny_hunt.lua`.
+- **Opção 1 (1 Clique — Recomendado):** No menu **Tools** > **Scripting...** > **File** > **Recent scripts** > clique no 1º item da lista.
+- **Opção 2 (Teclado):** No menu **Tools** > **Scripting...** > pressione `Ctrl+O`, cole com `Ctrl+V` e dê `Enter`.
 
 *Dica: o Fast-Forward do mGBA pode ser usado para acelerar a velocidade da emulação.*
 

@@ -387,6 +387,13 @@ class InstanceManager:
             except Exception:
                 pass
 
+            # Para Pokémon Emerald, cria arquivo emerald_starter.txt na pasta da instância
+            if SELECTED_GAME == "emerald":
+                try:
+                    (inst_dir / "emerald_starter.txt").write_text(f"{TARGET_STARTER}\n", encoding="utf-8")
+                except Exception:
+                    pass
+
             # Cria script shiny_hunt.lua na pasta da instância
             self._create_instance_lua_script(inst_dir, i)
 
@@ -398,6 +405,15 @@ class InstanceManager:
                 print(f"  {C.cross()} Cópia do SAV corrompida na instância {i}")
                 sys.exit(1)
 
+        # Pré-configura no histórico [recentScripts] do mGBA (qt.ini) e copia para o Clipboard
+        try:
+            from shiny_core import register_mgba_recent_script, copy_to_clipboard
+            target_lua = Path(LUA_SCRIPT).resolve()
+            register_mgba_recent_script(target_lua)
+            copy_to_clipboard(str(target_lua))
+        except Exception:
+            pass
+
         print(f"  {C.check()} {NUM_INSTANCES} diretórios de instância criados em:")
         print(f"      {C.DIM}{INSTANCES_DIR}{C.RESET}")
 
@@ -408,6 +424,8 @@ class InstanceManager:
             inst_rom = inst_dir / ROM_NAME
             env = os.environ.copy()
             env["SHINY_INSTANCE_ID"] = str(i)
+            if SELECTED_GAME == "emerald":
+                env["SHINY_EMERALD_STARTER"] = TARGET_STARTER
             try:
                 proc = subprocess.Popen(
                     [MGBA_PATH, str(inst_rom)],
@@ -530,23 +548,30 @@ def print_instructions():
     print()
     print(f"  {C.CYAN}{C.BOLD}══ INSTRUÇÕES ══{C.RESET}")
     print()
-    if "magi" in LUA_SCRIPT.name.lower():
+    if SELECTED_GAME == "emerald":
+        starter_names = {
+            "treecko": "Treecko (Planta - Seta Esquerda ◀)",
+            "torchic": "Torchic (Fogo - Centro ●)",
+            "mudkip": "Mudkip (Água - Seta Direita ▶)",
+        }
+        st_name = starter_names.get(TARGET_STARTER, TARGET_STARTER.capitalize())
+        print(f"  {C.YELLOW}Jogo:{C.RESET}  {C.BOLD}Pokémon Emerald (US){C.RESET}")
+        print(f"  {C.YELLOW}Alvo:{C.RESET}  {C.BOLD}Inicial de Hoenn: {st_name}{C.RESET}")
+        print(f"  {C.YELLOW}Setup no jogo:{C.RESET} Salve em frente à bolsa do Prof. Birch na Rota 101 com 0 Pokémon na party.")
+    elif "magi" in LUA_SCRIPT.name.lower():
         print(f"  {C.YELLOW}Alvo:{C.RESET} {C.BOLD}Magikarp (Vendedor Rota 4 - Slot Livre){C.RESET}")
         print(f"  {C.YELLOW}Setup no jogo:{C.RESET} Salve em frente ao vendedor com pelo menos 1 slot livre na party.")
     else:
         print(f"  {C.YELLOW}Alvo:{C.RESET} {C.BOLD}Iniciais de Kanto (Bulbasaur / Charmander / Squirtle - Slot 1){C.RESET}")
         print(f"  {C.YELLOW}Setup no jogo:{C.RESET} Salve em frente à Pokébola do inicial desejado com 0 Pokémon na party.")
     print()
+    print(f"  {C.GREEN}{C.BOLD}★ ATALHO RÁPIDO (O script já foi pré-configurado no seu mGBA e copiado pro Clipboard!){C.RESET}")
     print(f"  Para {C.BOLD}CADA{C.RESET} janela do mGBA (todas as {NUM_INSTANCES}):")
     print()
-    print(f"    {C.YELLOW}1.{C.RESET} Menu {C.BOLD}Tools{C.RESET} → {C.BOLD}Scripting...{C.RESET}")
-    print(f"    {C.YELLOW}2.{C.RESET} Na janela de scripting: {C.BOLD}File{C.RESET} → {C.BOLD}Load script...{C.RESET}")
-    print(f"    {C.YELLOW}3.{C.RESET} Selecione o arquivo:")
+    print(f"    {C.CYAN}Opção 1 (1 Clique):{C.RESET} Menu {C.BOLD}Tools{C.RESET} → {C.BOLD}Scripting...{C.RESET} → {C.BOLD}File{C.RESET} → {C.BOLD}Recent scripts{C.RESET} → {C.BOLD}[0] {LUA_SCRIPT.name}{C.RESET}")
+    print(f"    {C.CYAN}Opção 2 (Teclado):{C.RESET}  Menu {C.BOLD}Tools{C.RESET} → {C.BOLD}Scripting...{C.RESET} → {C.BOLD}Ctrl+O{C.RESET} → {C.BOLD}Ctrl+V{C.RESET} → {C.BOLD}Enter{C.RESET}")
     print()
-    print(f"       {C.GREEN}{C.BOLD}{LUA_SCRIPT}{C.RESET}")
-    print()
-    print(f"  {C.warn()} Carregue o script em {C.BOLD}todas as {NUM_INSTANCES} janelas{C.RESET}")
-    print(f"  {C.warn()} O script conecta automaticamente ao servidor")
+    print(f"  {C.warn()} O script conecta automaticamente ao servidor!")
     print()
 
 

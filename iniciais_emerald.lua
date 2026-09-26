@@ -93,10 +93,31 @@ local STATE = {
 -- ==================== NORMALIZAÇÃO DO ALVO ====================
 
 local function getNormalizedStarter(starterStr)
-    local s = string.lower(tostring(starterStr or "treecko")):gsub("%s+", "")
-    if s:find("tree") or s:find("planta") or s:find("grass") then
+    local s = starterStr
+    -- Se não foi definido especificamente no header, tenta ler do ambiente ou de emerald_starter.txt
+    if not s or s == "" or s == "treecko" then
+        if os and type(os.getenv) == "function" then
+            local ok, envVal = pcall(function() return os.getenv("SHINY_EMERALD_STARTER") end)
+            if ok and envVal and envVal ~= "" then
+                s = envVal
+            end
+        end
+        if (not s or s == "" or s == "treecko") and io and type(io.open) == "function" then
+            local ok, f = pcall(function() return io.open("emerald_starter.txt", "r") end)
+            if ok and f then
+                local content = f:read("*all")
+                f:close()
+                if content and content ~= "" then
+                    s = content
+                end
+            end
+        end
+    end
+
+    local clean = string.lower(tostring(s or "treecko")):gsub("%s+", "")
+    if clean:find("tree") or clean:find("planta") or clean:find("grass") then
         return "treecko", "Treecko (Planta - Seta Esquerda ◀)"
-    elseif s:find("mud") or s:find("agua") or s:find("water") then
+    elseif clean:find("mud") or clean:find("agua") or clean:find("water") then
         return "mudkip", "Mudkip (Agua - Seta Direita ▶)"
     else
         return "torchic", "Torchic (Fogo - Centro ●)"

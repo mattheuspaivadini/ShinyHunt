@@ -30,7 +30,9 @@ from shiny_core import (
     InstanceManager,
     ShinyServer,
     calculate_shiny_chance,
+    copy_to_clipboard,
     format_elapsed,
+    register_mgba_recent_script,
 )
 
 # Habilita suporte a High-DPI no Windows para fontes nítidas
@@ -1117,16 +1119,27 @@ class ShinyHuntGUI:
             self.entry_sav.insert(0, str(Path(path).resolve()))
 
     def _copy_lua_path(self):
-        """Copia o caminho do script Lua para a área de transferência do Windows."""
+        """Copia o caminho do script Lua para a área de transferência e pré-registra no mGBA (qt.ini)."""
         lua_path = self.entry_lua.get().strip() or str(self.config.lua_script_path)
-        lua_name = Path(lua_path).name
+        lua_target = Path(lua_path).resolve()
+        lua_name = lua_target.name
+
+        # Registra no histórico do mGBA e copia para a área de transferência
+        register_mgba_recent_script(lua_target)
+        copy_to_clipboard(str(lua_target))
         self.root.clipboard_clear()
-        self.root.clipboard_append(lua_path)
-        self.log(f"Caminho do script Lua ({lua_name}) copiado para a área de transferência: {lua_path}", "SUCCESS")
+        self.root.clipboard_append(str(lua_target))
+
+        self.log(f"Script ({lua_name}) pré-registrado no histórico do mGBA e copiado para o Clipboard!", "SUCCESS")
         messagebox.showinfo(
-            "Caminho Copiado!",
-            f"O caminho do script Lua ({lua_name}) foi copiado para a área de transferência:\n\n{lua_path}\n\n"
-            f"No mGBA, acesse:\nTools > Scripting > File > Load script e cole o caminho!",
+            "Script Pré-configurado!",
+            f"O script '{lua_name}' foi configurado no histórico do mGBA e seu caminho foi copiado!\n\n"
+            f"Caminho:\n{lua_target}\n\n"
+            f"COMO CARREGAR NAS JANELAS DO mGBA:\n\n"
+            f"• MÉTODO 1 (1 CLIQUE - Mais Rápido!):\n"
+            f"  Menu Tools > Scripting > File > Recent scripts > clique no 1º item ({lua_name})!\n\n"
+            f"• MÉTODO 2 (Direto com Teclado):\n"
+            f"  Menu Tools > Scripting > aperte Ctrl+O e dê Ctrl+V para colar o caminho!",
         )
 
     def _show_instructions(self):
@@ -1171,12 +1184,12 @@ class ShinyHuntGUI:
         msg = (
             f"{target_info}"
             "COMO CARREGAR O SCRIPT LUA NAS JANELAS:\n\n"
-            "1. Clique no botão 'INICIAR CAÇADA'. O programa criará as cópias da ROM e abrirá as janelas do mGBA.\n\n"
+            "1. Clique em 'INICIAR CAÇADA'. O programa abrirá as janelas do mGBA, configurará o histórico do emulador e copiará o caminho para o seu Clipboard!\n\n"
             "2. Para CADA janela do mGBA aberta:\n"
-            "   - No menu superior do mGBA: Tools > Scripting...\n"
-            "   - Na janela de script que abrir: File > Load script...\n"
-            f"   - Selecione o arquivo: {lua_name}\n"
-            f"     (Caminho completo: {lua_path})\n\n"
+            f"   • MÉTODO RÁPIDO (1 CLIQUE):\n"
+            f"     No menu: Tools > Scripting... > File > Recent scripts > clique em {lua_name}!\n\n"
+            f"   • MÉTODO DIRETO COM TECLADO:\n"
+            f"     No menu: Tools > Scripting... > aperte Ctrl+O e depois Ctrl+V (o caminho já está copiado)!\n\n"
             "3. O script conecta automaticamente e a caçada começa!\n"
             "4. Quando o Shiny for encontrado, o programa salvará no Slot 1 e fechará as outras instâncias automaticamente."
         )
@@ -1220,6 +1233,17 @@ class ShinyHuntGUI:
         self.lbl_config_status.config(text="")
         self.config = config
         self.config.save()  # Salva para as próximas execuções
+
+        # Pré-configura o script atual no histórico [recentScripts] do mGBA (qt.ini)
+        # e copia o caminho completo para a Área de Transferência
+        try:
+            target_lua = Path(self.config.lua_script_path).resolve()
+            register_mgba_recent_script(target_lua)
+            copy_to_clipboard(str(target_lua))
+            self.root.clipboard_clear()
+            self.root.clipboard_append(str(target_lua))
+        except Exception:
+            pass
 
         # Atualiza botões e status visual
         self.is_hunting = True
@@ -1295,7 +1319,11 @@ class ShinyHuntGUI:
             lua_filename = Path(self.config.lua_script_path).name
             self.event_queue.put((
                 "log",
-                (f"LEMBRE-SE: Carregue {lua_filename} nas janelas (Tools > Scripting > Load script).", "WARNING"),
+                (f"DICA RÁPIDA: '{lua_filename}' já está no topo de 'Recent scripts' e no seu Clipboard!", "SUCCESS"),
+            ))
+            self.event_queue.put((
+                "log",
+                ("Nas janelas: Tools > Scripting > File > Recent scripts (ou Ctrl+O > Ctrl+V > Enter).", "WARNING"),
             ))
 
         except Exception as e:
