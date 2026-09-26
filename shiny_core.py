@@ -561,13 +561,12 @@ class InstanceManager:
                 if lua_src.name != "shiny_hunt.lua":
                     (inst_dir / "shiny_hunt.lua").write_text(header + content, encoding="utf-8")
 
-            # Garante que shiny_hunt.lua, shiny_magi.lua e iniciais_emerald.lua estejam disponíveis na instância
+            # Garante que shiny_hunt.lua, shiny_magi.lua e iniciais_emerald.lua estejam sempre atualizados na instância
             for default_file in (DEFAULT_LUA_PATH, MAGIKARP_LUA_PATH, EMERALD_LUA_PATH):
                 if default_file.exists():
                     dst = inst_dir / default_file.name
-                    if not dst.exists() or default_file == lua_src:
-                        text = default_file.read_text(encoding="utf-8")
-                        dst.write_text(header + text, encoding="utf-8")
+                    text = default_file.read_text(encoding="utf-8")
+                    dst.write_text(header + text, encoding="utf-8")
         except Exception:
             pass
 

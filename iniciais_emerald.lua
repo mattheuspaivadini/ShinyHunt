@@ -60,8 +60,8 @@ local KEY_L      = 9
 local WAIT_AFTER_RESET    = 360   -- ~6.0s: espera BIOS + intro Game Freak (estrela cadente)
 local TITLE_MASH_DURATION = 240   -- ~4.0s: mash A/Start na title screen (Rayquaza)
 local CONTINUE_DURATION   = 180   -- ~3.0s: selecionar Continue e carregar o save
-local LOADING_WAIT        = 150   -- ~2.5s: espera o jogo carregar no overworld
-local OPEN_BAG_WAIT       = 150   -- ~2.5s: espera animacao de fade e abertura completa da bolsa
+local LOADING_WAIT        = 180   -- ~3.0s: espera o jogo carregar no overworld
+local OPEN_BAG_WAIT       = 120   -- ~2.0s: espera animacao de fade e abertura completa da bolsa
 local MASH_TIMEOUT        = 3600  -- ~60s: timeout de seguranca
 local PRESS_INTERVAL      = 12    -- Pressionar botao a cada 12 frames (~5x/s)
 local PRESS_HOLD_FRAMES   = 4     -- Manter botao pressionado por 4 frames
@@ -267,14 +267,46 @@ local function readOTID()
     return 0
 end
 
---- Pressiona uma tecla do GBA
+--- Pressiona uma tecla do GBA (compatibilidade ampla addKey + setKeys bitmask)
 local function pressKey(key)
     pcall(function() emu:addKey(key) end)
+    pcall(function() emu:setKeys(1 << key) end)
 end
 
---- Solta todas as teclas
+--- Solta todas as teclas do GBA
 local function releaseAll()
     pcall(function() emu:setKeys(0) end)
+    for k = 0, 9 do
+        pcall(function() emu:clearKey(k) end)
+    end
+    pcall(function() emu:clearKeys(0x3FF) end)
+end
+
+-- Tabela de decodificação de espécie do Pokémon (GBA Gen 3)
+local GROWTH_BLOCK = {
+    [0]=0, [1]=0, [2]=0, [3]=0, [4]=0, [5]=0,
+    [6]=1, [7]=1, [8]=2, [9]=3, [10]=2, [11]=3,
+    [12]=1, [13]=1, [14]=2, [15]=3, [16]=2, [17]=3,
+    [18]=1, [19]=1, [20]=2, [21]=3, [22]=2, [23]=3
+}
+
+--- Lê a espécie do primeiro Pokémon da party a partir dos dados descriptografados
+local function readSpecies()
+    local pv = readPV()
+    local otid = readOTID()
+    if pv == 0 then return 0 end
+    local ok, species = pcall(function()
+        local key = pv ~ otid
+        local order = pv % 24
+        local block = GROWTH_BLOCK[order] or 0
+        local growthAddr = (ADDR_PARTY_PV + 32) + (block * 12)
+        local rawWord = emu:read16(growthAddr)
+        return rawWord ~ (key & 0xFFFF)
+    end)
+    if ok and species then
+        return species
+    end
+    return 0
 end
 
 -- ==================== FUNÇÕES DE SOCKET ====================
@@ -468,15 +500,18 @@ local function onFrame()
         end
 
     elseif currentState == STATE.OPEN_BAG then
-        -- ── Interage com a bolsa no chao para abrir a tela de escolha ──
-        if stateFrames == 1 or stateFrames == 20 or stateFrames == 40 then
+        -- ── Interage com a bolsa no chão (apenas UMA pressão do botão A!) ──
+        -- Pressiona A do frame 5 ao 18 para garantir início da interação
+        if stateFrames == 5 then
             pressKey(KEY_A)
-        elseif stateFrames == 8 or stateFrames == 28 or stateFrames == 48 then
+        elseif stateFrames == 18 then
             releaseAll()
         end
 
-        -- Aguarda o fade out, inicializacao grafica e fade in da bolsa
-        -- Necessita de ~2.5s (150 frames) para tela estar 100% pronta para navegacao
+        -- CRÍTICO: NUNCA pressionar o botão A em nenhum outro frame neste estado!
+        -- A animação de abertura da bolsa leva ~50 frames. Se pressionarmos A após ela
+        -- abrir, o jogo selecionará instantaneamente o Torchic (que é a posição padrão do meio)!
+        -- Aguardamos 120 frames (~2.0s) para que a bolsa esteja 100% aberta, visível e parada.
         if stateFrames >= OPEN_BAG_WAIT then
             releaseAll()
             console:log("[State] Bolsa aberta! Navegando ate: " .. starterDisplayName .. "...")
@@ -485,56 +520,56 @@ local function onFrame()
 
     elseif currentState == STATE.SELECT_STARTER then
         -- ── Move o cursor na bolsa conforme o inicial desejado ──
-        -- O cursor padrao do jogo comeca no meio: Torchic (index 1)
+        -- O cursor padrão do jogo começa no meio: Torchic (index 1)
         if normalizedStarter == "treecko" then
             -- Mover para a esquerda (Treecko = index 0)
-            -- Envia 3 pulsos firmes de KEY_LEFT espaçados por 20 frames
-            if stateFrames == 10 or stateFrames == 30 or stateFrames == 50 then
+            -- Envia 3 pulsos firmes de KEY_LEFT para garantir a movimentação
+            if stateFrames == 5 or stateFrames == 25 or stateFrames == 45 then
                 pressKey(KEY_LEFT)
-            elseif stateFrames == 20 or stateFrames == 40 or stateFrames == 60 then
+            elseif stateFrames == 15 or stateFrames == 35 or stateFrames == 55 then
                 releaseAll()
             end
 
-            if stateFrames >= 80 then
+            if stateFrames >= 70 then
                 releaseAll()
-                console:log("[State] Posicionado em Treecko! Abrindo Pokebola...")
+                console:log("[State] Cursor posicionado em Treecko! Abrindo Pokebola...")
                 changeState(STATE.CONFIRM_CHOICE)
             end
 
         elseif normalizedStarter == "mudkip" then
             -- Mover para a direita (Mudkip = index 2)
-            -- Envia 3 pulsos firmes de KEY_RIGHT espaçados por 20 frames
-            if stateFrames == 10 or stateFrames == 30 or stateFrames == 50 then
+            -- Envia 3 pulsos firmes de KEY_RIGHT para garantir a movimentação
+            if stateFrames == 5 or stateFrames == 25 or stateFrames == 45 then
                 pressKey(KEY_RIGHT)
-            elseif stateFrames == 20 or stateFrames == 40 or stateFrames == 60 then
+            elseif stateFrames == 15 or stateFrames == 35 or stateFrames == 55 then
                 releaseAll()
             end
 
-            if stateFrames >= 80 then
+            if stateFrames >= 70 then
                 releaseAll()
-                console:log("[State] Posicionado em Mudkip! Abrindo Pokebola...")
+                console:log("[State] Cursor posicionado em Mudkip! Abrindo Pokebola...")
                 changeState(STATE.CONFIRM_CHOICE)
             end
 
         else
             -- Torchic já é a posição central padrão do jogo
             releaseAll()
-            if stateFrames >= 40 then
-                console:log("[State] Posicionado em Torchic! Abrindo Pokebola...")
+            if stateFrames >= 30 then
+                console:log("[State] Cursor mantido em Torchic! Abrindo Pokebola...")
                 changeState(STATE.CONFIRM_CHOICE)
             end
         end
 
     elseif currentState == STATE.CONFIRM_CHOICE then
         -- ── Pressiona A na Pokebola escolhida para abrir o zoom e a pergunta ──
-        if stateFrames == 1 or stateFrames == 20 then
+        if stateFrames == 5 or stateFrames == 25 then
             pressKey(KEY_A)
-        elseif stateFrames == 8 or stateFrames == 28 then
+        elseif stateFrames == 15 or stateFrames == 35 then
             releaseAll()
         end
 
-        -- Aguarda o zoom do circulo branco e o dialogo 'Do you choose this POKéMON? YES / NO'
-        if stateFrames >= 70 then
+        -- Aguarda o zoom do circulo branco, cry do Pokemon e o dialogo 'YES / NO'
+        if stateFrames >= 75 then
             releaseAll()
             console:log("[State] Confirmando 'SIM' para " .. starterDisplayName .. "...")
             changeState(STATE.MASHING)
@@ -594,12 +629,27 @@ local function onFrame()
         local p2     = pv & 0xFFFF
         local xorVal = p1 ~ p2 ~ tid ~ sid
 
-        console:log("  Pokemon:  " .. starterDisplayName)
-        console:log("  PV:       " .. hex(pv))
-        console:log("  OTID:     " .. hex(otid))
-        console:log("  TID:      " .. tid)
-        console:log("  SID:      " .. sid)
-        console:log("  XOR:      " .. xorVal .. " (shiny se < 8)")
+        local speciesId = readSpecies()
+        local speciesNames = {
+            [277] = "Treecko",
+            [280] = "Torchic",
+            [283] = "Mudkip"
+        }
+        local actualName = speciesNames[speciesId] or ("Especie #" .. tostring(speciesId))
+
+        console:log("  Pokemon alvo:    " .. starterDisplayName)
+        console:log("  Pokemon obtido:  " .. actualName)
+        console:log("  PV:              " .. hex(pv))
+        console:log("  OTID:            " .. hex(otid))
+        console:log("  TID:             " .. tid)
+        console:log("  SID:             " .. sid)
+        console:log("  XOR:             " .. xorVal .. " (shiny se < 8)")
+
+        if (normalizedStarter == "treecko" and speciesId ~= 277 and speciesId ~= 0) or
+           (normalizedStarter == "torchic" and speciesId ~= 280 and speciesId ~= 0) or
+           (normalizedStarter == "mudkip" and speciesId ~= 283 and speciesId ~= 0) then
+            console:log("  [ALERTA] ATENCAO: Especie obtida (" .. actualName .. ") difere do alvo configurado!")
+        end
 
         local shiny = isShiny(pv, otid)
 

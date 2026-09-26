@@ -341,9 +341,8 @@ class InstanceManager:
             for default_file in (DEFAULT_LUA_SCRIPT, MAGIKARP_LUA_SCRIPT, EMERALD_LUA_SCRIPT):
                 if default_file.exists():
                     dst = inst_dir / default_file.name
-                    if not dst.exists() or default_file == LUA_SCRIPT:
-                        text = default_file.read_text(encoding="utf-8")
-                        dst.write_text(header + text, encoding="utf-8")
+                    text = default_file.read_text(encoding="utf-8")
+                    dst.write_text(header + text, encoding="utf-8")
         except Exception:
             pass
 
