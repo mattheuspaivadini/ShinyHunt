@@ -119,6 +119,7 @@ Shiny se: (P1 XOR P2 XOR TID XOR SID) < 8
 - [ ] Shiny hunt dos lendários de Hoenn (Emerald) *(até o momento todos estão pendentes)*
 - [ ] Compatibilidade com as outras versões dos jogos (Leaf Green, Ruby, Sapphire)
 - [ ] Funcionalidade com outros jogos da franquia (jogos de NDS)
+- [ ] Suporte para Linux e MacOS
 
 ---
 
@@ -214,3 +215,4 @@ Shiny if: (P1 XOR P2 XOR TID XOR SID) < 8
 - [ ] Shiny hunt for Hoenn legendaries (Emerald) *(currently all pending)*
 - [ ] Compatibility with other game versions (Leaf Green, Ruby, Sapphire)
 - [ ] Support for other games in the franchise (NDS games)
+- [ ] Linux Support and MacOS
