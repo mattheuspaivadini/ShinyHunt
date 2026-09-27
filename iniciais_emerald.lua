@@ -662,21 +662,19 @@ local function onFrame()
     elseif currentState == STATE.TITLE_WAIT then
         releaseAll()
 
-        -- Se ja passou da BIOS (>60 frames) e detectar Menu Principal, Overworld ou Bolsa:
-        if stateFrames >= 60 then
-            if isStarterBagOpen() then
-                console:log("[State] Bolsa detectada precocemente! Indo para selecao...")
-                changeState(STATE.SELECT_STARTER)
-                return
-            elseif isOverworldOpen() then
-                console:log("[State] Overworld detectado precocemente! Indo para interacao com a bolsa...")
-                changeState(STATE.OPEN_BAG)
-                return
-            elseif isMainMenuOpen() then
-                console:log("[State] Menu Principal detectado! Indo para selecao de Continue...")
-                changeState(STATE.MAIN_MENU)
-                return
-            end
+        -- Se por acaso ja estiver no Menu Principal, Overworld ou Bolsa:
+        if isStarterBagOpen() then
+            console:log("[State] Bolsa detectada precocemente! Indo para selecao...")
+            changeState(STATE.SELECT_STARTER)
+            return
+        elseif isOverworldOpen() then
+            console:log("[State] Overworld detectado precocemente! Indo para interacao com a bolsa...")
+            changeState(STATE.OPEN_BAG)
+            return
+        elseif isMainMenuOpen() then
+            console:log("[State] Menu Principal detectado! Indo para selecao de Continue...")
+            changeState(STATE.MAIN_MENU)
+            return
         end
 
         -- Espera intro inicial (~240 frames = 4s) + delay de RNG
@@ -739,33 +737,22 @@ local function onFrame()
             return
         end
 
-        -- Se o menu principal ja fechou (iniciou fade/carregamento do save):
-        if not isMainMenuOpen() then
-            releaseAll()
-            console:log("[State] Menu Principal fechado! Aguardando carregamento do save...")
-            changeState(STATE.LOADING)
-            return
-        end
-
         -- No Menu Principal, o cursor comeca em "CONTINUE" por padrao quando ha save.
-        -- Envia pulsos firmes em 'A' a cada 20 frames (frames 25, 45, 65...) caso o primeiro toque ocorra durante fade
-        local menuCycle = (stateFrames - 25) % 20
-        if menuCycle < 6 then
-            if menuCycle == 0 then
-                console:log("[State] Selecionando 'Continue' no Menu Principal...")
+        -- Dá um toque firme em 'A' (frames 25 a 35) para selecionar Continue
+        if stateFrames >= 25 and stateFrames <= 35 then
+            if stateFrames == 25 then
+                console:log("[State] Selecionando 'Continue' no Menu Principal (toque unico)...")
             end
             pressKey(KEY_A)
         else
             releaseAll()
         end
 
-        -- Timeout de seguranca no Menu Principal: apos 180 frames sem fechar o menu, reseta
-        if stateFrames >= 180 then
+        -- Apos confirmar 'Continue', avanca para LOADING apos frame 50
+        if stateFrames >= 50 then
             releaseAll()
-            console:log("[AVISO] Timeout no Menu Principal (save nao carregou). Resetando...")
-            logToFile("AVISO: Timeout no Menu Principal. Resetando...")
-            changeState(STATE.RESETTING)
-            return
+            console:log("[State] Aguardando carregamento do save no Overworld...")
+            changeState(STATE.LOADING)
         end
 
     elseif currentState == STATE.LOADING then
@@ -779,17 +766,10 @@ local function onFrame()
                 console:log("[State] Bolsa detectada! Indo para a selecao do inicial...")
                 logToFile("Bolsa detectada apos o atraso de loading. Indo para a selecao...")
                 changeState(STATE.SELECT_STARTER)
-            elseif isOverworldOpen() then
+            else
                 console:log("[State] Jogo carregado no Overworld! Interagindo com a bolsa...")
                 logToFile("Jogo carregado no overworld. Interagindo com a bolsa...")
                 changeState(STATE.OPEN_BAG)
-            else
-                -- Se ainda nao carregou o overworld nem a bolsa, aguarda margem de seguranca
-                if stateFrames >= 180 + loadingExtra then
-                    console:log("[AVISO] Overworld nao detectado apos loading. Resetando...")
-                    logToFile("AVISO: Overworld nao detectado apos loading. Resetando...")
-                    changeState(STATE.RESETTING)
-                end
             end
         elseif isStarterBagOpen() or isOverworldOpen() then
             -- Save ja carregou, mas o atraso ainda nao terminou: apenas espera em silencio
