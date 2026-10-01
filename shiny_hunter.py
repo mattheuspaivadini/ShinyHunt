@@ -28,10 +28,29 @@ SAV_NAME = "FireRed.sav"
 NUM_INSTANCES = 15
 SERVER_PORT = 27015
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
+if getattr(sys, "frozen", False):
+    SCRIPT_DIR = Path(sys.executable).parent.resolve()
+else:
+    SCRIPT_DIR = Path(__file__).parent.resolve()
+
 DEFAULT_LUA_SCRIPT = SCRIPT_DIR / "shiny_hunt.lua"
 MAGIKARP_LUA_SCRIPT = SCRIPT_DIR / "shiny_magi.lua"
 EMERALD_LUA_SCRIPT = SCRIPT_DIR / "iniciais_emerald.lua"
+
+# Se algum dos scripts Lua não for encontrado na pasta do .exe, tenta extrair dos arquivos empacotados
+for bundled_name, bundled_var in [
+    ("shiny_hunt.lua", DEFAULT_LUA_SCRIPT),
+    ("shiny_magi.lua", MAGIKARP_LUA_SCRIPT),
+    ("iniciais_emerald.lua", EMERALD_LUA_SCRIPT),
+]:
+    if not bundled_var.exists() and hasattr(sys, "_MEIPASS"):
+        bundled = Path(sys._MEIPASS) / bundled_name
+        if bundled.exists():
+            try:
+                shutil.copy2(bundled, bundled_var)
+            except Exception:
+                pass
+
 LUA_SCRIPT = MAGIKARP_LUA_SCRIPT if MAGIKARP_LUA_SCRIPT.exists() else DEFAULT_LUA_SCRIPT
 TARGET_STARTER = "treecko"
 SELECTED_GAME = "firered"
