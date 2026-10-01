@@ -112,11 +112,13 @@ class ShinyServer:
     def stop(self):
         """Para o servidor e fecha todas as conexões."""
         self._running = False
-        for conn in list(self.clients.values()):
-            try:
-                conn.close()
-            except Exception:
-                pass
+        with self.lock:
+            for conn in list(self.clients.values()):
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self.clients.clear()
         if self.server_socket:
             try:
                 self.server_socket.close()
