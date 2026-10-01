@@ -1611,7 +1611,8 @@ class ShinyHuntGUI:
 
             # 3. Calcula velocidade de tentativas por hora
             if self.server:
-                total_att = self.server.total_attempts
+                with self.server.lock:
+                    total_att = self.server.total_attempts
                 elapsed_seconds = (datetime.now() - self.start_time).total_seconds()
                 if elapsed_seconds > 5 and total_att > 0:
                     speed_per_hour = int((total_att / elapsed_seconds) * 3600)
