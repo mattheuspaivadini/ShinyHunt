@@ -444,6 +444,8 @@ class ShinyServer:
                     self.instance_stats[client_id]["status"] = "caçando"
                     self.instance_stats[client_id]["last_update"] = datetime.now()
 
+                current_attempts = self.instance_stats[client_id]["attempts"]
+
             # Envia confirmação de ID para o Lua
             try:
                 conn.send(f"ID|{client_id}\n".encode("utf-8"))
@@ -457,7 +459,7 @@ class ShinyServer:
             self._emit("instance_update", {
                 "client_id": client_id,
                 "status": "caçando",
-                "attempts": self.instance_stats[client_id]["attempts"],
+                "attempts": current_attempts,
             })
             return client_id
 
