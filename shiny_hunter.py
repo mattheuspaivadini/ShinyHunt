@@ -569,7 +569,7 @@ def print_instructions():
 
 def format_elapsed(start_time):
     """Formata o tempo decorrido."""
-    elapsed = (datetime.now() - start_time).total_seconds()
+    elapsed = max(0, int((datetime.now() - start_time).total_seconds()))
     hours = int(elapsed // 3600)
     minutes = int((elapsed % 3600) // 60)
     seconds = int(elapsed % 60)
