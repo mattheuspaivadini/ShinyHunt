@@ -423,6 +423,11 @@ class ShinyServer:
                 if current_id is not None and current_id != client_id:
                     if self.clients.get(current_id) == conn:
                         self.clients.pop(current_id, None)
+                    # Marca o antigo ID como desconectado para manter a tabela correta
+                    old_stats = self.instance_stats.get(current_id)
+                    if old_stats and old_stats["status"] != "★ SHINY!":
+                        old_stats["status"] = "desconectado"
+                        old_stats["last_update"] = datetime.now()
 
                 old_conn = self.clients.get(client_id)
                 if old_conn and old_conn != conn:
