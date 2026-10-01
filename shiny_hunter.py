@@ -285,7 +285,7 @@ class ShinyServer:
                 stat["status"] = "★ SHINY!"
 
                 # Envia STOP para todas as outras instâncias
-                for cid, cconn in self.clients.items():
+                for cid, cconn in list(self.clients.items()):
                     if cid != client_id and cconn:
                         try:
                             cconn.send(b"STOP\n")
