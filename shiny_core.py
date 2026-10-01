@@ -289,6 +289,8 @@ class ShinyServer:
 
     def start(self):
         """Inicia o servidor TCP em background."""
+        if self._running:
+            self.stop()
         self.start_time = datetime.now()
         self._running = True
         self.shiny_found = False
