@@ -130,7 +130,12 @@ class ShinyServer:
         for i in range(1, NUM_INSTANCES + 1):
             if i not in self.clients:
                 return i
+        # Fallback: todos os slots 1..NUM_INSTANCES estão ocupados
+        if self._next_id <= NUM_INSTANCES:
+            self._next_id = NUM_INSTANCES
         self._next_id += 1
+        while self._next_id in self.clients:
+            self._next_id += 1
         return self._next_id
 
     def _accept_loop(self):
