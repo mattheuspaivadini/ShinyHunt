@@ -13,9 +13,19 @@ if emu and type(emu.read32) == "function" then
             "iniciais_emerald.lua",
             "../iniciais_emerald.lua",
             "instances/iniciais_emerald.lua",
-            "C:/Users/Matheus/Documents/ShinyHunt/iniciais_emerald.lua",
-            "C:/roms/FireRed/iniciais_emerald.lua"
         }
+        -- Tenta resolver o caminho a partir do diretório deste script
+        local scriptDir = nil
+        pcall(function()
+            local info = debug.getinfo(1, "S")
+            if info and info.source and info.source:sub(1,1) == "@" then
+                local src = info.source:sub(2)
+                scriptDir = src:match("(.*[/\\])")
+            end
+        end)
+        if scriptDir then
+            table.insert(candidates, scriptDir .. "iniciais_emerald.lua")
+        end
         for _, path in ipairs(candidates) do
             local fOk, chunk = pcall(loadfile, path)
             if fOk and chunk then
