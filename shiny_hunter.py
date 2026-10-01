@@ -28,10 +28,29 @@ SAV_NAME = "FireRed.sav"
 NUM_INSTANCES = 15
 SERVER_PORT = 27015
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
+if getattr(sys, "frozen", False):
+    SCRIPT_DIR = Path(sys.executable).parent.resolve()
+else:
+    SCRIPT_DIR = Path(__file__).parent.resolve()
+
 DEFAULT_LUA_SCRIPT = SCRIPT_DIR / "shiny_hunt.lua"
 MAGIKARP_LUA_SCRIPT = SCRIPT_DIR / "shiny_magi.lua"
 EMERALD_LUA_SCRIPT = SCRIPT_DIR / "iniciais_emerald.lua"
+
+# Se algum dos scripts Lua não for encontrado na pasta do .exe, tenta extrair dos arquivos empacotados
+for bundled_name, bundled_var in [
+    ("shiny_hunt.lua", DEFAULT_LUA_SCRIPT),
+    ("shiny_magi.lua", MAGIKARP_LUA_SCRIPT),
+    ("iniciais_emerald.lua", EMERALD_LUA_SCRIPT),
+]:
+    if not bundled_var.exists() and hasattr(sys, "_MEIPASS"):
+        bundled = Path(sys._MEIPASS) / bundled_name
+        if bundled.exists():
+            try:
+                shutil.copy2(bundled, bundled_var)
+            except Exception:
+                pass
+
 LUA_SCRIPT = MAGIKARP_LUA_SCRIPT if MAGIKARP_LUA_SCRIPT.exists() else DEFAULT_LUA_SCRIPT
 TARGET_STARTER = "treecko"
 SELECTED_GAME = "firered"
@@ -112,11 +131,13 @@ class ShinyServer:
     def stop(self):
         """Para o servidor e fecha todas as conexões."""
         self._running = False
-        for conn in list(self.clients.values()):
-            try:
-                conn.close()
-            except Exception:
-                pass
+        with self.lock:
+            for conn in list(self.clients.values()):
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self.clients.clear()
         if self.server_socket:
             try:
                 self.server_socket.close()
@@ -128,7 +149,12 @@ class ShinyServer:
         for i in range(1, NUM_INSTANCES + 1):
             if i not in self.clients:
                 return i
+        # Fallback: todos os slots 1..NUM_INSTANCES estão ocupados
+        if self._next_id <= NUM_INSTANCES:
+            self._next_id = NUM_INSTANCES
         self._next_id += 1
+        while self._next_id in self.clients:
+            self._next_id += 1
         return self._next_id
 
     def _accept_loop(self):
@@ -204,6 +230,10 @@ class ShinyServer:
                 if current_id is not None and current_id != client_id:
                     if self.clients.get(current_id) == conn:
                         self.clients.pop(current_id, None)
+                    # Marca o antigo ID como desconectado para manter a tabela correta
+                    old_stats = self.instance_stats.get(current_id)
+                    if old_stats and old_stats["status"] != "★ SHINY!":
+                        old_stats["status"] = "desconectado"
 
                 old_conn = self.clients.get(client_id)
                 if old_conn and old_conn != conn:
@@ -285,7 +315,7 @@ class ShinyServer:
                 stat["status"] = "★ SHINY!"
 
                 # Envia STOP para todas as outras instâncias
-                for cid, cconn in self.clients.items():
+                for cid, cconn in list(self.clients.items()):
                     if cid != client_id and cconn:
                         try:
                             cconn.send(b"STOP\n")
@@ -567,7 +597,7 @@ def print_instructions():
 
 def format_elapsed(start_time):
     """Formata o tempo decorrido."""
-    elapsed = (datetime.now() - start_time).total_seconds()
+    elapsed = max(0, int((datetime.now() - start_time).total_seconds()))
     hours = int(elapsed // 3600)
     minutes = int((elapsed % 3600) // 60)
     seconds = int(elapsed % 60)

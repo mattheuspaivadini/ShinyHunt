@@ -289,6 +289,8 @@ class ShinyServer:
 
     def start(self):
         """Inicia o servidor TCP em background."""
+        if self._running:
+            self.stop()
         self.start_time = datetime.now()
         self._running = True
         self.shiny_found = False
@@ -332,7 +334,12 @@ class ShinyServer:
         for i in range(1, self.max_instances + 1):
             if i not in self.clients:
                 return i
+        # Fallback: todos os slots 1..max_instances estão ocupados
+        if self._next_id <= self.max_instances:
+            self._next_id = self.max_instances
         self._next_id += 1
+        while self._next_id in self.clients:
+            self._next_id += 1
         return self._next_id
 
     def _accept_loop(self):
@@ -418,6 +425,11 @@ class ShinyServer:
                 if current_id is not None and current_id != client_id:
                     if self.clients.get(current_id) == conn:
                         self.clients.pop(current_id, None)
+                    # Marca o antigo ID como desconectado para manter a tabela correta
+                    old_stats = self.instance_stats.get(current_id)
+                    if old_stats and old_stats["status"] != "★ SHINY!":
+                        old_stats["status"] = "desconectado"
+                        old_stats["last_update"] = datetime.now()
 
                 old_conn = self.clients.get(client_id)
                 if old_conn and old_conn != conn:
@@ -439,6 +451,8 @@ class ShinyServer:
                     self.instance_stats[client_id]["status"] = "caçando"
                     self.instance_stats[client_id]["last_update"] = datetime.now()
 
+                current_attempts = self.instance_stats[client_id]["attempts"]
+
             # Envia confirmação de ID para o Lua
             try:
                 conn.send(f"ID|{client_id}\n".encode("utf-8"))
@@ -452,7 +466,7 @@ class ShinyServer:
             self._emit("instance_update", {
                 "client_id": client_id,
                 "status": "caçando",
-                "attempts": self.instance_stats[client_id]["attempts"],
+                "attempts": current_attempts,
             })
             return client_id
 

@@ -1206,6 +1206,11 @@ class ShinyHuntGUI:
         self.entry_port.config(state="disabled")
         self.radio_magi.config(state="disabled")
         self.radio_char.config(state="disabled")
+        self.radio_treecko.config(state="disabled")
+        self.radio_torchic.config(state="disabled")
+        self.radio_mudkip.config(state="disabled")
+        self.radio_game_fr.config(state="disabled")
+        self.radio_game_em.config(state="disabled")
 
         self.status_badge.config(text="CAÇANDO", fg=DarkTheme.ACCENT_GREEN)
         self.lbl_instances_val.config(text=f"0 / {self.config.num_instances}")
@@ -1577,6 +1582,11 @@ class ShinyHuntGUI:
         self.entry_port.config(state="normal")
         self.radio_magi.config(state="normal")
         self.radio_char.config(state="normal")
+        self.radio_treecko.config(state="normal")
+        self.radio_torchic.config(state="normal")
+        self.radio_mudkip.config(state="normal")
+        self.radio_game_fr.config(state="normal")
+        self.radio_game_em.config(state="normal")
 
         self.status_badge.config(text="PARADO", fg=DarkTheme.ACCENT_RED, bg=DarkTheme.SURFACE_1)
         self.log("Caçada encerrada.", "INFO")
@@ -1601,7 +1611,8 @@ class ShinyHuntGUI:
 
             # 3. Calcula velocidade de tentativas por hora
             if self.server:
-                total_att = self.server.total_attempts
+                with self.server.lock:
+                    total_att = self.server.total_attempts
                 elapsed_seconds = (datetime.now() - self.start_time).total_seconds()
                 if elapsed_seconds > 5 and total_att > 0:
                     speed_per_hour = int((total_att / elapsed_seconds) * 3600)
